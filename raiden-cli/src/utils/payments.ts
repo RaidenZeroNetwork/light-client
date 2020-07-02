@@ -1,17 +1,9 @@
 import { RaidenTransfer } from 'raiden-ts';
 import { ApiPayment, ApiPaymentEvents } from '../types';
 
-function transformTransferDirectionToPaymentEvent(
-  direction: RaidenTransfer['direction'],
-): ApiPaymentEvents {
-  if (direction === 'sent') return ApiPaymentEvents.sent;
-  if (direction === 'received') return ApiPaymentEvents.received;
-  throw new Error(`Unexpected transfer direction: ${direction}`);
-}
-
 export function transformSdkTransferToApiPayment(transfer: RaidenTransfer): ApiPayment {
   return {
-    event: transformTransferDirectionToPaymentEvent(transfer.direction),
+    event: ApiPaymentEvents[transfer.direction],
     initiator_address: transfer.initiator,
     target_address: transfer.target,
     token_address: transfer.token,
