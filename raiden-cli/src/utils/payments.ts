@@ -3,10 +3,10 @@ import { ApiPayment, ApiPaymentEvents } from '../types';
 
 function transformTransferDirectionToPaymentEvent(
   direction: RaidenTransfer['direction'],
-  // @ts-ignore: Function lacks ending return statement and return type does not include 'undefined'
 ): ApiPaymentEvents {
   if (direction === 'sent') return ApiPaymentEvents.sent;
   if (direction === 'received') return ApiPaymentEvents.received;
+  throw new Error(`Unexpected transfer direction: ${direction}`);
 }
 
 export function transformSdkTransferToApiPayment(transfer: RaidenTransfer): ApiPayment {
