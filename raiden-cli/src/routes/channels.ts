@@ -3,8 +3,6 @@ import { first } from 'rxjs/operators';
 import { ErrorCodes, RaidenError } from 'raiden-ts';
 import { Cli } from '../types';
 
-import artifact from "./Counter.json";
-
 import {
   validateAddressParameter,
   isInvalidParameterError,
@@ -98,7 +96,8 @@ export function makeChannelsRouter(this: Cli): Router {
   router.put('/', openChannel.bind(this));
 
   router.patch('/:tokenAddress/:partnerAddress', (_request: Request, response: Response) => {
-    response.status(201).json(proofzkBalances());
+    console.log(_request.body.total_deposit, "-------- total_deposit")
+    response.status(201).json(proofzkBalances(_request.body));
   });
 
   return router;
