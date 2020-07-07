@@ -96,8 +96,13 @@ export function makeChannelsRouter(this: Cli): Router {
   router.put('/', openChannel.bind(this));
 
   router.patch('/:tokenAddress/:partnerAddress', (_request: Request, response: Response) => {
-    console.log(_request.body.total_deposit, "-------- total_deposit")
-    response.status(201).json(proofzkBalances(_request.body));
+    let state;
+    if(_request.body.state === 'closed') {
+      state = 'closed';
+    } else {
+      state = _request.body.total_deposit;
+    }
+    response.status(201).json(proofzkBalances(state));
   });
 
   return router;
