@@ -1,11 +1,9 @@
-/* eslint-disable @typescript-eslint/no-explicit-any,@typescript-eslint/camelcase */
-jest.mock('matrix-js-sdk');
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+import { raidenEpicDeps, makeSignature, mockRTC } from '../mocks';
+import { epicFixtures } from '../fixtures';
 
 import { createClient } from 'matrix-js-sdk';
-
-import { patchVerifyMessage } from '../patches';
-patchVerifyMessage();
-
 import { of, timer, EMPTY, Observable } from 'rxjs';
 import { first, tap, takeUntil, toArray } from 'rxjs/operators';
 import { fakeSchedulers } from 'rxjs-marbles/jest';
@@ -13,7 +11,7 @@ import { verifyMessage, BigNumber } from 'ethers/utils';
 
 import { RaidenAction, raidenConfigUpdate } from 'raiden-ts/actions';
 import { raidenReducer } from 'raiden-ts/reducer';
-import { channelMonitor } from 'raiden-ts/channels/actions';
+import { channelMonitored } from 'raiden-ts/channels/actions';
 import {
   matrixPresence,
   matrixRoom,
@@ -50,9 +48,6 @@ import { encodeJsonMessage, signMessage } from 'raiden-ts/messages/utils';
 import { ErrorCodes } from 'raiden-ts/utils/error';
 import { Signed, Address } from 'raiden-ts/utils/types';
 import { Capabilities } from 'raiden-ts/constants';
-
-import { epicFixtures } from '../fixtures';
-import { raidenEpicDeps, makeSignature, mockRTC } from '../mocks';
 
 describe('transport epic', () => {
   let depsMock: ReturnType<typeof raidenEpicDeps>,
@@ -272,9 +267,9 @@ describe('transport epic', () => {
   });
 
   describe('matrixMonitorChannelPresenceEpic', () => {
-    test('channelMonitor triggers matrixPresence.request', async () => {
+    test('channelMonitored triggers matrixPresence.request', async () => {
       const action$ = of<RaidenAction>(
-        channelMonitor({ id: channelId }, { tokenNetwork, partner }),
+        channelMonitored({ id: channelId }, { tokenNetwork, partner }),
       );
       const promise = matrixMonitorChannelPresenceEpic(action$).toPromise();
       await expect(promise).resolves.toEqual(
@@ -533,8 +528,7 @@ describe('transport epic', () => {
     );
     await expect(promise).resolves.toBeUndefined();
     expect(matrix.setAvatarUrl).toHaveBeenCalledTimes(1);
-    // noReceive is dynamic
-    expect(matrix.setAvatarUrl).toHaveBeenCalledWith('noReceive,noDelivery,webRTC');
+    expect(matrix.setAvatarUrl).toHaveBeenCalledWith('noDelivery,webRTC');
 
     promise = matrixUpdateCapsEpic(action$, state$, depsMock).toPromise();
     action$.next(
@@ -763,7 +757,11 @@ describe('transport epic', () => {
 
         const sub = matrixLeaveUnknownRoomsEpic(EMPTY, state$, depsMock).subscribe();
 
-        matrix.emit('Room', { roomId });
+        matrix.emit('Room', {
+          roomId,
+          getCanonicalAlias: jest.fn(),
+          getAliases: jest.fn(() => []),
+        });
 
         advance(1e3);
 
@@ -780,31 +778,21 @@ describe('transport epic', () => {
     );
 
     test(
-      'do not leave discovery room',
+      'do not leave global room',
       fakeSchedulers((advance) => {
         expect.assertions(2);
 
         const roomId = `!discoveryRoomId:${matrixServer}`,
           state$ = of(state),
-          name = `#raiden_${depsMock.network.name}_discovery:${matrixServer}`;
-
-        matrix.getRoom.mockReturnValueOnce({
-          roomId,
-          name,
-          getMember: jest.fn(),
-          getJoinedMembers: jest.fn(() => []),
-          getCanonicalAlias: jest.fn(() => name),
-          getAliases: jest.fn(() => []),
-          currentState: {
-            roomId,
-            setStateEvents: jest.fn(),
-            members: {},
-          } as any,
-        } as any);
+          roomAlias = `#raiden_${depsMock.network.name}_discovery:${matrixServer}`;
 
         const sub = matrixLeaveUnknownRoomsEpic(EMPTY, state$, depsMock).subscribe();
 
-        matrix.emit('Room', { roomId });
+        matrix.emit('Room', {
+          roomId,
+          getCanonicalAlias: jest.fn(),
+          getAliases: jest.fn(() => [roomAlias]),
+        });
 
         advance(1e3);
 
@@ -830,7 +818,11 @@ describe('transport epic', () => {
 
         const sub = matrixLeaveUnknownRoomsEpic(EMPTY, state$, depsMock).subscribe();
 
-        matrix.emit('Room', { roomId });
+        matrix.emit('Room', {
+          roomId,
+          getCanonicalAlias: jest.fn(),
+          getAliases: jest.fn(() => []),
+        });
 
         advance(1e3);
 
@@ -1514,7 +1506,7 @@ describe('transport epic', () => {
       await expect(promise).resolves.toEqual({
         meta: { address: partner },
         payload: undefined,
-        type: 'rtcChannel',
+        type: 'rtc/channel',
       });
     });
 
@@ -1528,7 +1520,7 @@ describe('transport epic', () => {
       await expect(promise).resolves.toEqual({
         meta: { address: partner },
         payload: undefined,
-        type: 'rtcChannel',
+        type: 'rtc/channel',
       });
     });
 

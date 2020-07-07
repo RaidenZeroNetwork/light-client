@@ -17,12 +17,14 @@ export interface RootState {
   accessDenied: DeniedReason;
   channels: RaidenChannels;
   tokens: Tokens;
+  tokenAddresses: string[];
   network: Network;
   presences: Presences;
   transfers: Transfers;
   stateBackup: string;
   settings: Settings;
   config: Partial<RaidenConfig>;
+  userDepositTokenAddress: string;
 }
 
 declare global {

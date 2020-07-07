@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/camelcase */
 import { Wallet } from 'ethers';
 import { bigNumberify } from 'ethers/utils';
 import { HashZero, One, Zero } from 'ethers/constants';
@@ -224,6 +223,32 @@ describe('sign/verify, pack & encode/decode ', () => {
 
     const decoded = decodeJsonMessage(encoded);
     expect(decoded).toEqual(signed);
+  });
+
+  test('LockExpired 2', () => {
+    const message = `{
+      "chain_id": "1",
+      "message_identifier": "12568622946510763377",
+      "signature": "0x47bf00f00cb12b54f77686604b314321f2537816818bab28604109653ab37e490071c136359bf92fd873a4e9a5185ca7016a690f5791e9af83181cd98db25c381c",
+      "locksroot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+      "secrethash": "0x8bcfdc09e3fee24b8e8cd006d3db0c9f5f307aa0deb23d10d7ba5f334281308c",
+      "nonce": "2",
+      "transferred_amount": "0",
+      "locked_amount": "0",
+      "token_network_address": "0x5b606943b36f3569e00ec4178a9f83eea8730184",
+      "channel_identifier": "17",
+      "recipient": "0x14efa2b271969a46a094a23e0d49e32c1b617f89",
+      "type": "LockExpired"
+    }`;
+    const decoded = decodeJsonMessage(message) as Signed<LockExpired>;
+    expect(Signed(LockExpired).is(decoded)).toBe(true);
+    expect(createMessageHash(decoded)).toEqual(
+      '0xcce8018c2c0dd11a312ef2bb1c8fe660fe09a8a4ba37ab5824239ff459eecb5c',
+    );
+    expect(packMessage(decoded)).toEqual(
+      '0x5b606943b36f3569e00ec4178a9f83eea873018400000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000001100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002cce8018c2c0dd11a312ef2bb1c8fe660fe09a8a4ba37ab5824239ff459eecb5c',
+    );
+    expect(getMessageSigner(decoded)).toBe('0x1Fd883F06A01c537D08441065aA4b2Cf75c3CBF8');
   });
 
   test('SecretRequest', async () => {
@@ -557,11 +582,11 @@ describe('sign/verify, pack & encode/decode ', () => {
   });
 
   test('RequestMonitoring', async () => {
-    const balanceHash = createBalanceHash(
-      Zero as UInt<32>,
-      One as UInt<32>,
-      '0x607e890c54e5ba67cd483bedae3ba9da9bf2ef2fbf237b9fb39a723b2296077b' as Hash,
-    );
+    const balanceHash = createBalanceHash({
+      transferredAmount: Zero as UInt<32>,
+      lockedAmount: One as UInt<32>,
+      locksroot: '0x607e890c54e5ba67cd483bedae3ba9da9bf2ef2fbf237b9fb39a723b2296077b' as Hash,
+    });
     const message: MonitorRequest = {
       type: MessageType.MONITOR_REQUEST,
       balance_proof: {

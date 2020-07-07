@@ -91,11 +91,11 @@ import { mapState } from 'vuex';
 @Component({
   components: {
     AddressDisplay,
-    AmountDisplay
+    AmountDisplay,
   },
   computed: {
-    ...mapState(['tokens'])
-  }
+    ...mapState(['tokens']),
+  },
 })
 export default class Transaction extends Vue {
   @Prop({ required: true })
@@ -116,7 +116,7 @@ export default class Transaction extends Vue {
       margin-left: 20px;
 
       &__address {
-        padding: 0 0 2px 5px;
+        padding: 1px 0 2px 5px;
       }
 
       &__time-stamp {

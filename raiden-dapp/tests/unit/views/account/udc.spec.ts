@@ -23,18 +23,19 @@ describe('UDC.vue', () => {
     name: 'Service Token',
     symbol: 'SVT',
     decimals: 18,
-    balance: Zero
+    balance: Zero,
   } as Token;
 
   function createWrapper() {
     return mount(UDC, {
       vuetify,
       store,
+      stubs: ['v-dialog'],
       mocks: {
         $identicon: $identicon(),
         $t: (msg: string) => msg,
-        $raiden
-      }
+        $raiden,
+      },
     });
   }
 
@@ -46,8 +47,9 @@ describe('UDC.vue', () => {
       getUDCCapacity: jest.fn().mockResolvedValue(bigNumberify('5000')),
       monitoringReward: bigNumberify('500'),
       mint: jest.fn(),
-      depositToUDC: jest.fn()
+      depositToUDC: jest.fn(),
     };
+    store.commit('userDepositTokenAddress', '0x1234');
     store.commit('updateTokens', { '0x1234': token });
     wrapper = createWrapper();
 
@@ -60,7 +62,7 @@ describe('UDC.vue', () => {
       userDepositTokenAddress: '0x1234',
       fetchTokenData: jest.fn(),
       getUDCCapacity: jest.fn().mockResolvedValue(Zero),
-      monitoringReward: bigNumberify('500')
+      monitoringReward: bigNumberify('500'),
     };
     wrapper = createWrapper();
 
@@ -85,5 +87,15 @@ describe('UDC.vue', () => {
     await flushPromises();
 
     expect(wrapper.vm.$data.loading).toBe(false);
+  });
+
+  test('clicking withdrawal button enables withdrawal dialog', async () => {
+    expect(wrapper.vm.$data.withdrawFromUdc).toBe(false);
+
+    const withdrawalButton = wrapper.find('.udc__withdrawal-button');
+    withdrawalButton.trigger('click');
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.vm.$data.withdrawFromUdc).toBe(true);
   });
 });

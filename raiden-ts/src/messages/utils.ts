@@ -6,7 +6,9 @@ import { encode as rlpEncode } from 'ethers/utils/rlp';
 import { HashZero } from 'ethers/constants';
 import logging from 'loglevel';
 
-import { Address, Hash, HexString, Signature, UInt, Signed, decode, assert } from '../utils/types';
+import { LocksrootZero } from '../constants';
+import { assert } from '../utils';
+import { Address, Hash, HexString, Signature, Signed, decode } from '../utils/types';
 import { encode, losslessParse, losslessStringify } from '../utils/data';
 import { BalanceProof } from '../channels/types';
 import { EnvelopeMessage, Message, MessageType, Metadata } from './types';
@@ -53,17 +55,20 @@ export function createMetadataHash(metadata: Metadata): Hash {
 /**
  * Returns a balance_hash from transferred&locked amounts & locksroot
  *
- * @param transferredAmount - EnvelopeMessage.transferred_amount
- * @param lockedAmount - EnvelopeMessage.locked_amount
- * @param locksroot - Hash of all current locks
+ * @param bp - BalanceProof-like object
+ * @param bp.transferredAmount - balanceProof's transferredAmount
+ * @param bp.lockedAmount - balanceProof's lockedAmount
+ * @param bp.locksroot - balanceProof's locksroot
  * @returns Hash of the balance
  */
-export function createBalanceHash(
-  transferredAmount: UInt<32>,
-  lockedAmount: UInt<32>,
-  locksroot: Hash,
-): Hash {
-  return (transferredAmount.isZero() && lockedAmount.isZero() && locksroot === HashZero
+export function createBalanceHash({
+  transferredAmount,
+  lockedAmount,
+  locksroot,
+}: Pick<BalanceProof, 'transferredAmount' | 'lockedAmount' | 'locksroot'>): Hash {
+  return (transferredAmount.isZero() &&
+  lockedAmount.isZero() &&
+  (locksroot === HashZero || locksroot === LocksrootZero)
     ? HashZero
     : keccak256(
         concat([encode(transferredAmount, 32), encode(lockedAmount, 32), encode(locksroot, 32)]),
@@ -151,11 +156,11 @@ export function packMessage(message: Message) {
     case MessageType.UNLOCK:
     case MessageType.LOCK_EXPIRED: {
       const additionalHash = createMessageHash(message),
-        balanceHash = createBalanceHash(
-          message.transferred_amount,
-          message.locked_amount,
-          message.locksroot,
-        );
+        balanceHash = createBalanceHash({
+          transferredAmount: message.transferred_amount,
+          lockedAmount: message.locked_amount,
+          locksroot: message.locksroot,
+        });
       return hexlify(
         concat([
           encode(message.token_network_address, 20),

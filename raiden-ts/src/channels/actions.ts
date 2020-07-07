@@ -1,5 +1,4 @@
 /* eslint-disable @typescript-eslint/no-namespace */
-/* eslint-disable @typescript-eslint/class-name-casing */
 import * as t from 'io-ts';
 
 import { createAction, ActionType, createAsyncAction } from '../utils/actions';
@@ -13,7 +12,7 @@ const ChannelId = t.type({
 });
 
 /* A new head in the blockchain is detected by provider */
-export const newBlock = createAction('newBlock', t.type({ blockNumber: t.number }));
+export const newBlock = createAction('block/new', t.type({ blockNumber: t.number }));
 export interface newBlock extends ActionType<typeof newBlock> {}
 
 /**
@@ -21,7 +20,7 @@ export interface newBlock extends ActionType<typeof newBlock> {}
  * fromBlock is only set on the first time, to fetch and handle past events
  */
 export const tokenMonitored = createAction(
-  'tokenMonitored',
+  'token/monitored',
   t.intersection([
     t.type({
       token: Address,
@@ -29,6 +28,7 @@ export const tokenMonitored = createAction(
     }),
     t.partial({
       fromBlock: t.number,
+      toBlock: t.number,
     }),
   ]),
 );
@@ -61,12 +61,12 @@ export namespace channelOpen {
 }
 
 /* Channel with meta:ChannelId + payload.id should be monitored */
-export const channelMonitor = createAction(
-  'channel/monitor',
-  t.intersection([t.type({ id: t.number }), t.partial({ fromBlock: t.number })]),
+export const channelMonitored = createAction(
+  'channel/monitored',
+  t.type({ id: t.number }),
   ChannelId,
 );
-export interface channelMonitor extends ActionType<typeof channelMonitor> {}
+export interface channelMonitored extends ActionType<typeof channelMonitored> {}
 
 export const channelDeposit = createAsyncAction(
   ChannelId,

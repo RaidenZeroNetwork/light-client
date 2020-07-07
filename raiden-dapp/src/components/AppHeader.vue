@@ -18,7 +18,6 @@
               />
             </v-btn>
           </div>
-          <v-spacer />
           <v-col>
             <div class="app-header__top__content__title">
               <span v-if="isConnected">
@@ -35,7 +34,37 @@
               {{ network }}
             </div>
           </v-col>
-          <v-spacer />
+          <span
+            v-if="!loading && defaultAccount"
+            class="app-header__notifications-wrapper"
+          >
+            <v-btn
+              icon
+              height="30px"
+              width="25px"
+              @click.native="notificationPanel()"
+            >
+              <v-badge
+                v-if="newNotifications"
+                color="notification"
+                overlap
+                bordered
+                dot
+              >
+                <v-img
+                  height="30px"
+                  width="25px"
+                  :src="require('@/assets/notifications.svg')"
+                />
+              </v-badge>
+              <v-img
+                v-else
+                height="30px"
+                width="25px"
+                :src="require('@/assets/notifications.svg')"
+              />
+            </v-btn>
+          </span>
           <span class="app-header__account-wrapper">
             <header-identicon @click.native="navigateToAccoount()" />
           </span>
@@ -54,31 +83,47 @@
 
 <script lang="ts">
 import { Component, Mixins } from 'vue-property-decorator';
-import { mapGetters, mapState } from 'vuex';
+import { createNamespacedHelpers, mapGetters, mapState } from 'vuex';
 import { RouteNames } from '@/router/route-names';
 import NavigationMixin from '@/mixins/navigation-mixin';
 import HeaderIdenticon from '@/components/HeaderIdenticon.vue';
 import AddressDisplay from '@/components/AddressDisplay.vue';
 
+const {
+  mapState: mapNotificationsState,
+  mapMutations,
+} = createNamespacedHelpers('notifications');
+
 @Component({
   components: {
     HeaderIdenticon,
-    AddressDisplay
+    AddressDisplay,
   },
   computed: {
     ...mapState(['loading', 'defaultAccount']),
-    ...mapGetters(['network', 'isConnected'])
-  }
+    ...mapNotificationsState(['newNotifications']),
+    ...mapGetters(['network', 'isConnected']),
+  },
+  methods: {
+    ...mapMutations(['notificationsViewed']),
+  },
 })
 export default class AppHeader extends Mixins(NavigationMixin) {
   isConnected!: boolean;
   defaultAccount!: string;
   network!: string;
+  newNotifications!: boolean;
+  notificationsViewed!: () => void;
+
+  notificationPanel() {
+    this.notificationsViewed();
+    this.navigateToNotifications();
+  }
 
   get canGoBack(): boolean {
     const routesWithoutBackBtn: string[] = [
       RouteNames.HOME,
-      RouteNames.TRANSFER
+      RouteNames.TRANSFER,
     ];
     return (
       this.isConnected && !routesWithoutBackBtn.includes(this.$route.name!)
@@ -106,7 +151,7 @@ export default class AppHeader extends Mixins(NavigationMixin) {
       align-items: center;
       display: flex;
       justify-content: center;
-      margin: 0 20px 0 20px;
+      margin: 0 20px 0 40px;
 
       &__back {
         align-items: center;
@@ -145,6 +190,11 @@ export default class AppHeader extends Mixins(NavigationMixin) {
       height: 40px;
       padding: 0 20px 0 20px;
     }
+  }
+
+  &__notifications-wrapper {
+    margin-right: 20px;
+    cursor: pointer;
   }
 
   &__account-wrapper {

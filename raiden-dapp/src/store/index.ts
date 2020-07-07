@@ -1,14 +1,15 @@
 import Vue from 'vue';
 import VuexPersistence from 'vuex-persist';
 import Vuex, { StoreOptions } from 'vuex';
-import { RootState, Tokens, Transfers, Settings } from '@/types';
+import { RootState, Settings, Tokens, Transfers } from '@/types';
 import {
+  Capabilities,
   ChannelState,
+  getNetworkName,
   RaidenChannel,
   RaidenChannels,
-  RaidenTransfer,
   RaidenConfig,
-  Capabilities
+  RaidenTransfer,
 } from 'raiden-ts';
 import {
   AccTokenModel,
@@ -17,7 +18,7 @@ import {
   PlaceHolderNetwork,
   Token,
   TokenModel,
-  Presences
+  Presences,
 } from '@/model/types';
 import map from 'lodash/map';
 import flatMap from 'lodash/flatMap';
@@ -27,7 +28,8 @@ import reduce from 'lodash/reduce';
 import orderBy from 'lodash/orderBy';
 import isEqual from 'lodash/isEqual';
 import isEmpty from 'lodash/isEmpty';
-import { Network, BigNumber } from 'ethers/utils';
+import { BigNumber, Network } from 'ethers/utils';
+import { notifications } from '@/store/notifications';
 
 Vue.use(Vuex);
 
@@ -40,15 +42,17 @@ const _defaultState: RootState = {
   accessDenied: DeniedReason.UNDEFINED,
   channels: {},
   tokens: {},
+  tokenAddresses: [],
   transfers: {},
   presences: {},
   network: PlaceHolderNetwork,
   stateBackup: '',
   settings: {
     isFirstTimeConnect: true,
-    useRaidenAccount: true
+    useRaidenAccount: true,
   },
-  config: {}
+  config: {},
+  userDepositTokenAddress: '',
 };
 
 export function defaultState(): RootState {
@@ -66,9 +70,9 @@ const hasNonZeroBalance = (a: Token, b: Token) =>
 
 const settingsLocalStorage = new VuexPersistence<RootState>({
   storage: window.localStorage,
-  reducer: state => ({ settings: state.settings }),
-  filter: mutation => mutation.type == 'updateSettings',
-  key: 'raiden_dapp_settings'
+  reducer: (state) => ({ settings: state.settings }),
+  filter: (mutation) => mutation.type == 'updateSettings',
+  key: 'raiden_dapp_settings',
 });
 
 const store: StoreOptions<RootState> = {
@@ -103,6 +107,9 @@ const store: StoreOptions<RootState> = {
           state.tokens[address] = { ...state.tokens[address], ...token };
         else state.tokens = { ...state.tokens, [address]: token };
     },
+    updateTokenAddresses(state: RootState, addresses: string[]) {
+      state.tokenAddresses = [...addresses];
+    },
     updatePresence(state: RootState, presence: Presences) {
       state.presences = { ...state.presences, ...presence };
     },
@@ -126,11 +133,14 @@ const store: StoreOptions<RootState> = {
     },
     updateConfig(state: RootState, config: Partial<RaidenConfig>) {
       state.config = config;
-    }
+    },
+    userDepositTokenAddress(state: RootState, address: string) {
+      state.userDepositTokenAddress = address;
+    },
   },
   actions: {},
   getters: {
-    tokens: function(state: RootState): TokenModel[] {
+    tokens: function (state: RootState): TokenModel[] {
       const reducer = (
         acc: AccTokenModel,
         channel: RaidenChannel
@@ -141,8 +151,8 @@ const store: StoreOptions<RootState> = {
       };
 
       return map(
-        filter(flatMap(state.channels), channels => !isEmpty(channels)),
-        tokenChannels => {
+        filter(flatMap(state.channels), (channels) => !isEmpty(channels)),
+        (tokenChannels) => {
           const model = reduce(tokenChannels, reducer, emptyTokenModel());
           const tokenInfo = state.tokens[model.address];
           if (tokenInfo) {
@@ -155,13 +165,16 @@ const store: StoreOptions<RootState> = {
       );
     },
     allTokens: (state: RootState): Token[] =>
-      Object.values(state.tokens).sort((a: Token, b: Token) => {
-        if (hasNonZeroBalance(a, b)) {
-          return (b.balance! as BigNumber).gt(a.balance! as BigNumber) ? 1 : -1;
-        }
-
-        return a.symbol && b.symbol ? a.symbol.localeCompare(b.symbol) : 0;
-      }),
+      Object.values(state.tokens)
+        .filter((token) => state.tokenAddresses.includes(token.address))
+        .sort((a: Token, b: Token) => {
+          if (hasNonZeroBalance(a, b)) {
+            return (b.balance! as BigNumber).gt(a.balance! as BigNumber)
+              ? 1
+              : -1;
+          }
+          return a.symbol && b.symbol ? a.symbol.localeCompare(b.symbol) : 0;
+        }),
     channels: (state: RootState) => (tokenAddress: string) => {
       let channels: RaidenChannel[] = [];
       const tokenChannels = state.channels[tokenAddress];
@@ -178,18 +191,21 @@ const store: StoreOptions<RootState> = {
       }
     },
     network: (state: RootState) => {
-      return state.network.name || `Chain ${state.network.chainId}`;
+      return getNetworkName(state.network);
+    },
+    mainnet: (state: RootState) => {
+      return state.network.chainId === 1;
     },
     channelWithBiggestCapacity: (_, getters) => (tokenAddress: string) => {
       const channels: RaidenChannel[] = getters.channels(tokenAddress);
       const openChannels = channels.filter(
-        value => value.state === ChannelState.open
+        (value) => value.state === ChannelState.open
       );
       return orderBy(openChannels, ['capacity'], ['desc'])[0];
     },
     pendingTransfers: ({ transfers }: RootState) =>
       Object.keys(transfers)
-        .filter(key => {
+        .filter((key) => {
           const { completed } = transfers[key];
 
           // return whether transfer is pending or not
@@ -201,7 +217,7 @@ const store: StoreOptions<RootState> = {
         }, {}),
     transfer: (state: RootState) => (paymentId: BigNumber) => {
       const key = Object.keys(state.transfers).find(
-        key => state.transfers[key].paymentId === paymentId
+        (key) => state.transfers[key].paymentId === paymentId
       );
 
       if (key) {
@@ -223,9 +239,15 @@ const store: StoreOptions<RootState> = {
     },
     canReceive: (state: RootState): boolean => {
       return !state.config.caps?.[Capabilities.NO_RECEIVE];
-    }
+    },
+    udcToken: (state: RootState): Token => {
+      return state.tokens[state.userDepositTokenAddress];
+    },
   },
-  plugins: [settingsLocalStorage.plugin]
+  plugins: [settingsLocalStorage.plugin],
+  modules: {
+    notifications,
+  },
 };
 
 export default new Vuex.Store(store);

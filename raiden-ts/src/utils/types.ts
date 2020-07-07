@@ -5,35 +5,13 @@ import { Two, Zero } from 'ethers/constants';
 import { Either, Right } from 'fp-ts/lib/Either';
 import { ThrowReporter } from 'io-ts/lib/ThrowReporter';
 import memoize from 'lodash/memoize';
+import { RaidenError } from './error';
 
 /* A Subset of DOM's Storage/localStorage interface which supports async/await */
 export interface Storage {
   getItem(key: string): string | null | Promise<string | null>;
   setItem(key: string, value: string): void | Promise<void>;
   removeItem(key: string): void | Promise<void>;
-}
-
-/**
- * Error for assertion functions/type guards
- */
-export class AssertionError extends Error {}
-
-/**
- * Type-safe assertion function (TS3.7)
- *
- * @param condition - Condition to validate as truthy
- * @param msg - Message to throw if condition is falsy
- * @param log - Logger to log error to
- */
-export function assert(
-  condition: any,
-  msg?: string,
-  log?: (...args: any[]) => void,
-): asserts condition {
-  if (!condition) {
-    log?.('AssertionError', condition, msg);
-    throw new AssertionError(msg ?? 'AssertionError');
-  }
 }
 
 function reporterAssert<T>(value: Either<t.Errors, T>): asserts value is Right<T> {
@@ -45,12 +23,29 @@ function reporterAssert<T>(value: Either<t.Errors, T>): asserts value is Right<T
  *
  * @param codec - io-ts codec to be used for decoding/validation
  * @param data - data to decode/validate
+ * @param customError - Message or error to throw if the decoding fails
+ * @param log - Logger to log error to
  * @returns Decoded value of codec type
  */
-export function decode<C extends t.Mixed>(codec: C, data: C['_I']): C['_A'] {
-  const decoded = codec.decode(data);
-  reporterAssert(decoded);
-  return decoded.right;
+export function decode<C extends t.Mixed>(
+  codec: C,
+  data: C['_I'],
+  customError?: string | Error,
+  log?: (...args: any[]) => void,
+): C['_A'] {
+  try {
+    const decoded = codec.decode(data);
+    reporterAssert(decoded);
+    return decoded.right;
+  } catch (originalError) {
+    log?.('__decode failed:', codec, data);
+
+    if (!customError) {
+      throw originalError;
+    } else {
+      throw customError instanceof Error ? customError : new RaidenError(customError);
+    }
+  }
 }
 
 /**

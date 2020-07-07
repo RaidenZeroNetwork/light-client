@@ -32,7 +32,7 @@
                 {{
                   $t('select-token.tokens.token.token-information', {
                     symbol: item.symbol,
-                    name: item.name
+                    name: item.name,
                   })
                 }}
               </v-list-item-title>
@@ -66,12 +66,11 @@ import NavigationMixin from '@/mixins/navigation-mixin';
 import BlockieMixin from '@/mixins/blockie-mixin';
 import ListHeader from '@/components/ListHeader.vue';
 import AmountDisplay from '@/components/AmountDisplay.vue';
-import Spinner from '@/components/icons/Spinner.vue';
 import AddressDisplay from '@/components/AddressDisplay.vue';
 
 @Component({
-  components: { Spinner, ListHeader, AddressDisplay, AmountDisplay },
-  computed: mapGetters(['allTokens'])
+  components: { ListHeader, AddressDisplay, AmountDisplay },
+  computed: mapGetters(['allTokens']),
 })
 export default class SelectToken extends Mixins(BlockieMixin, NavigationMixin) {
   allTokens!: Token[];

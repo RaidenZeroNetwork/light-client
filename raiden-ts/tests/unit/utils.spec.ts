@@ -1,10 +1,13 @@
-/* eslint-disable @typescript-eslint/ban-ts-ignore */
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+import { makeLog, makeRaiden, waitBlock, makeAddress, providersEmit, sleep } from './mocks';
+import { token, tokenNetwork } from './fixtures';
+
 import * as t from 'io-ts';
 import { fold, isRight } from 'fp-ts/lib/Either';
 import { pipe } from 'fp-ts/lib/pipeable';
 import { isError } from 'util';
 import { of } from 'rxjs';
-import { first, take, toArray } from 'rxjs/operators';
+import { first } from 'rxjs/operators';
 
 import { Event } from 'ethers/contract';
 import { BigNumber, bigNumberify, keccak256, hexDataLength } from 'ethers/utils';
@@ -31,110 +34,117 @@ import { LruCache } from 'raiden-ts/utils/lru';
 import { encode, losslessParse, losslessStringify } from 'raiden-ts/utils/data';
 import { getLocksroot, makeSecret, getSecrethash } from 'raiden-ts/transfers/utils';
 import { Lock } from 'raiden-ts/channels';
-import { makeLog, raidenEpicDeps } from './mocks';
+import { LocksrootZero } from 'raiden-ts/constants';
 
-describe('fromEthersEvent', () => {
-  const { provider } = raidenEpicDeps();
+const { JsonRpcProvider } = jest.requireActual('ethers/providers');
 
-  afterEach(() => {
-    jest.clearAllMocks();
-  });
+test('fromEthersEvent', async () => {
+  expect.assertions(3);
 
-  test('event registered and emitted', async () => {
-    const promise = fromEthersEvent<number>(provider, 'block').pipe(first()).toPromise();
-    provider.emit('block', 1337);
+  const provider = new JsonRpcProvider();
+  const onSpy = jest.spyOn(provider, 'on');
+  const removeListenerSpy = jest.spyOn(provider, 'removeListener');
 
-    const blockNumber = await promise;
+  const promise = fromEthersEvent<number>(provider, 'block').pipe(first()).toPromise();
+  provider.emit('block', 1337);
+  const blockNumber = await promise;
 
-    expect(blockNumber).toBe(1337);
-    expect(provider.on).toHaveBeenCalledTimes(1);
-    expect(provider.removeListener).toHaveBeenCalledTimes(1);
-  });
+  expect(blockNumber).toBe(1337);
+  expect(onSpy).toHaveBeenCalledTimes(1);
+  expect(removeListenerSpy).toHaveBeenCalledTimes(1);
 });
 
 describe('getEventsStream', () => {
-  const { provider, registryContract } = raidenEpicDeps();
-
-  afterEach(() => {
-    jest.clearAllMocks();
-  });
-
   type TokenNetworkCreatedEvent = [string, string, Event];
 
   test('newEvents$ only', async () => {
+    expect.assertions(4);
+    const raiden = await makeRaiden();
+    const { registryContract } = raiden.deps;
     const filter = registryContract.filters.TokenNetworkCreated(null, null);
 
-    const promise = getEventsStream<TokenNetworkCreatedEvent>(registryContract, [filter])
-      .pipe(first())
-      .toPromise();
+    const output: TokenNetworkCreatedEvent[] = [];
+    const sub = getEventsStream<TokenNetworkCreatedEvent>(registryContract, [
+      filter,
+    ]).subscribe((e) => output.push(e));
 
-    const tokenAddr = '0x0000000000000000000000000000000000000001',
-      tokenNetworkAddr = '0x0000000000000000000000000000000000000002';
     const log = makeLog({
-      filter: registryContract.filters.TokenNetworkCreated(tokenAddr, tokenNetworkAddr),
+      filter: registryContract.filters.TokenNetworkCreated(token, tokenNetwork),
     });
-    provider.emit(filter, log);
+    await providersEmit(filter, log);
 
-    const event = await promise;
+    await waitBlock();
+    await sleep(raiden.deps.provider.pollingInterval);
 
-    expect(event).toBeDefined();
-    expect(event[0]).toBe(tokenAddr);
-    expect(event[1]).toBe(tokenNetworkAddr);
+    expect(output).toHaveLength(1);
+    const event = output[0];
+    expect(event[0]).toBe(token);
+    expect(event[1]).toBe(tokenNetwork);
     expect(event[2]).toMatchObject({
       address: registryContract.address,
-      blockNumber: 1337,
-      args: { '0': tokenAddr, '1': tokenNetworkAddr, length: 2 },
+      blockNumber: expect.any(Number),
+      args: { '0': token, '1': tokenNetwork, length: 2 },
     });
+
+    sub.unsubscribe();
   });
 
   test('pastEvents$ and newEvents$', async () => {
+    expect.assertions(10);
+    const raiden = await makeRaiden();
+    const { provider, registryContract } = raiden.deps;
     const filter = registryContract.filters.TokenNetworkCreated(null, null);
 
-    const pastTokenAddr = '0x0000000000000000000000000000000000000003',
-      pastTokenNetworkAddr = '0x0000000000000000000000000000000000000004';
+    const pastToken = makeAddress();
+    const pastTokenNetwork = makeAddress();
 
     const pastLog = makeLog({
       blockNumber: 999,
-      filter: registryContract.filters.TokenNetworkCreated(pastTokenAddr, pastTokenNetworkAddr),
+      filter: registryContract.filters.TokenNetworkCreated(pastToken, pastTokenNetwork),
     });
 
     // ensure getEventsStream will need to wait for next block
-    provider.resetEventsBlock((undefined as unknown) as number);
-    provider.getLogs.mockResolvedValueOnce([pastLog]);
+    provider.resetEventsBlock(20);
+    await providersEmit(filter, pastLog);
 
-    const promise = getEventsStream<TokenNetworkCreatedEvent>(registryContract, [filter], of(1))
-      .pipe(take(2), toArray())
-      .toPromise();
+    const output: TokenNetworkCreatedEvent[] = [];
+    const sub = getEventsStream<TokenNetworkCreatedEvent>(
+      registryContract,
+      [filter],
+      of(1),
+    ).subscribe((e) => output.push(e));
 
-    provider.emit('block', 1336);
+    await waitBlock();
+    await waitBlock(1336);
+    await sleep(raiden.deps.provider.pollingInterval);
 
-    const tokenAddr = '0x0000000000000000000000000000000000000001',
-      tokenNetworkAddr = '0x0000000000000000000000000000000000000002';
     const log = makeLog({
-      filter: registryContract.filters.TokenNetworkCreated(tokenAddr, tokenNetworkAddr),
+      blockNumber: 1337,
+      filter: registryContract.filters.TokenNetworkCreated(token, tokenNetwork),
     });
-    setTimeout(() => provider.emit(filter, log), 10);
+    await providersEmit(filter, log);
 
-    const events = await promise;
+    await waitBlock();
+    await sleep(raiden.deps.provider.pollingInterval);
 
-    expect(events).toBeDefined();
-    expect(events).toHaveLength(2);
+    expect(output).toHaveLength(2);
 
-    expect(events[1][0]).toBe(tokenAddr);
-    expect(events[1][1]).toBe(tokenNetworkAddr);
-    expect(events[1][2]).toMatchObject({
+    expect(output[1][0]).toBe(token);
+    expect(output[1][1]).toBe(tokenNetwork);
+    expect(output[1][2]).toMatchObject({
       address: registryContract.address,
       blockNumber: 1337,
-      args: { '0': tokenAddr, '1': tokenNetworkAddr, length: 2 },
+      args: { '0': token, '1': tokenNetwork, length: 2 },
     });
 
-    expect(events[0][0]).toBe(pastTokenAddr);
-    expect(events[0][1]).toBe(pastTokenNetworkAddr);
-    const pastEvent = events[0][2];
+    expect(output[0][0]).toBe(pastToken);
+    expect(output[0][1]).toBe(pastTokenNetwork);
+
+    const pastEvent = output[0][2];
     expect(pastEvent).toMatchObject({
       address: registryContract.address,
       blockNumber: 999,
-      args: { '0': pastTokenAddr, '1': pastTokenNetworkAddr, length: 2 },
+      args: { '0': pastToken, '1': pastTokenNetwork, length: 2 },
     });
     pastEvent.removeListener();
 
@@ -145,11 +155,13 @@ describe('getEventsStream', () => {
     expect(provider.getBlock).toHaveBeenCalledWith(pastLog.blockHash);
     expect(provider.getTransaction).toHaveBeenCalledWith(pastLog.transactionHash);
     expect(provider.getTransactionReceipt).toHaveBeenCalledWith(pastLog.transactionHash);
+
+    sub.unsubscribe();
   });
 });
 
 test('patchSignSend', async () => {
-  const { provider } = raidenEpicDeps();
+  const provider = new JsonRpcProvider();
 
   const sendSpy = jest.spyOn(provider, 'send');
   sendSpy.mockImplementation(async (method, params) => [method, params]);
@@ -333,7 +345,7 @@ describe('data', () => {
 
     expect(() => encode(-1, 2)).toThrowError('negative');
     expect(() => encode(bigNumberify(65537), 2)).toThrowError('too large');
-    expect(() => encode('0x01', 2)).toThrowError(ErrorCodes.DTA_ARRAY_LENGTH_DIFFRENCE);
+    expect(() => encode('0x01', 2)).toThrowError(ErrorCodes.DTA_ARRAY_LENGTH_DIFFERENCE);
     // @ts-expect-error
     expect(() => encode(null, 2)).toThrowError(
       'Passed data is not a HEX string nor integer array',
@@ -357,6 +369,7 @@ describe('messages', () => {
     expect(getLocksroot([])).toBe(
       '0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470',
     );
+    expect(getLocksroot([])).toBe(LocksrootZero);
     const locks: Lock[] = [
       {
         amount: bigNumberify(1) as UInt<32>,

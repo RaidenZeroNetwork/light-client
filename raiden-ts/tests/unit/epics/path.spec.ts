@@ -1,6 +1,16 @@
-/* eslint-disable @typescript-eslint/camelcase */
-import { EMPTY, timer, Observable } from 'rxjs';
-import { first, takeUntil, toArray, pluck } from 'rxjs/operators';
+import {
+  raidenEpicDeps,
+  makeLog,
+  makeRaidens,
+  makeRaiden,
+  providersEmit,
+  makeAddress,
+  waitBlock,
+} from '../mocks';
+import { epicFixtures, ensureChannelIsOpen, ensureChannelIsDeposited, deposit } from '../fixtures';
+
+import { Observable } from 'rxjs';
+import { first, toArray, pluck } from 'rxjs/operators';
 import { bigNumberify, defaultAbiCoder } from 'ethers/utils';
 import { Zero, AddressZero, One } from 'ethers/constants';
 
@@ -11,17 +21,12 @@ import {
   channelOpen,
   channelDeposit,
   channelClose,
-  channelMonitor,
+  channelMonitored,
 } from 'raiden-ts/channels/actions';
 import { raidenConfigUpdate, RaidenAction } from 'raiden-ts/actions';
 import { matrixPresence } from 'raiden-ts/transport/actions';
 import { raidenReducer } from 'raiden-ts/reducer';
-import {
-  pathFindServiceEpic,
-  pfsCapacityUpdateEpic,
-  pfsServiceRegistryMonitorEpic,
-  pfsFeeUpdateEpic,
-} from 'raiden-ts/services/epics';
+import { pathFindServiceEpic, pfsFeeUpdateEpic } from 'raiden-ts/services/epics';
 import { pathFind, pfsListUpdated, iouPersist, iouClear } from 'raiden-ts/services/actions';
 import { messageGlobalSend } from 'raiden-ts/messages/actions';
 import { MessageType } from 'raiden-ts/messages/types';
@@ -31,9 +36,6 @@ import { ErrorCodes } from 'raiden-ts/utils/error';
 import { RaidenState } from 'raiden-ts/state';
 import { Capabilities } from 'raiden-ts/constants';
 import { signIOU } from 'raiden-ts/services/utils';
-
-import { epicFixtures } from '../fixtures';
-import { raidenEpicDeps, makeLog } from '../mocks';
 
 describe('PFS: pathFindServiceEpic', () => {
   let depsMock: ReturnType<typeof raidenEpicDeps>,
@@ -1204,84 +1206,29 @@ describe('PFS: pathFindServiceEpic', () => {
 });
 
 describe('PFS: pfsCapacityUpdateEpic', () => {
-  let depsMock: ReturnType<typeof raidenEpicDeps>,
-    token: ReturnType<typeof epicFixtures>['token'],
-    tokenNetwork: ReturnType<typeof epicFixtures>['tokenNetwork'],
-    channelId: ReturnType<typeof epicFixtures>['channelId'],
-    partner: ReturnType<typeof epicFixtures>['partner'],
-    settleTimeout: ReturnType<typeof epicFixtures>['settleTimeout'],
-    isFirstParticipant: ReturnType<typeof epicFixtures>['isFirstParticipant'],
-    txHash: ReturnType<typeof epicFixtures>['txHash'],
-    action$: ReturnType<typeof epicFixtures>['action$'],
-    state$: ReturnType<typeof epicFixtures>['state$'];
-
-  const openBlock = 121;
-
-  beforeEach(async () => {
-    depsMock = raidenEpicDeps();
-    ({
-      token,
-      tokenNetwork,
-      channelId,
-      partner,
-      settleTimeout,
-      isFirstParticipant,
-      txHash,
-      action$,
-      state$,
-    } = epicFixtures(depsMock));
-
-    // put an open channel in state
-    [
-      tokenMonitored({ token, tokenNetwork, fromBlock: 1 }),
-      channelOpen.success(
-        {
-          id: channelId,
-          settleTimeout,
-          isFirstParticipant,
-          token,
-          txHash,
-          txBlock: openBlock,
-          confirmed: true,
-        },
-        { tokenNetwork, partner },
-      ),
-      newBlock({ blockNumber: 125 }),
-    ].forEach((a) => action$.next(a));
-  });
-
   test('own channelDeposit.success triggers capacity update', async () => {
-    expect.assertions(1);
+    expect.assertions(2);
 
-    const deposit = bigNumberify(500) as UInt<32>;
+    const [raiden, partner] = await makeRaidens(2);
+    const pfsRoom = raiden.config.pfsRoom!;
+    await ensureChannelIsOpen([raiden, partner]);
 
-    let pfsRoom!: string;
-    depsMock.config$.pipe(first()).subscribe((config) => (pfsRoom = config.pfsRoom!));
-
-    const promise = pfsCapacityUpdateEpic(action$, state$, depsMock).toPromise();
-
-    action$.next(
-      channelDeposit.success(
-        {
-          id: channelId,
-          participant: depsMock.address,
-          totalDeposit: deposit,
-          txHash,
-          txBlock: openBlock + 1,
-          confirmed: true,
-        },
-        { tokenNetwork, partner },
+    expect(raiden.output).not.toContainEqual(
+      messageGlobalSend(
+        { message: expect.objectContaining({ type: MessageType.PFS_CAPACITY_UPDATE }) },
+        expect.anything(),
       ),
     );
-    setTimeout(() => action$.complete(), 10);
 
-    await expect(promise).resolves.toEqual(
+    await ensureChannelIsDeposited([raiden, partner], deposit);
+
+    expect(raiden.output).toContainEqual(
       messageGlobalSend(
         {
           message: expect.objectContaining({
             type: MessageType.PFS_CAPACITY_UPDATE,
-            updating_participant: depsMock.address,
-            other_participant: partner,
+            updating_participant: raiden.address,
+            other_participant: partner.address,
             updating_capacity: deposit,
             signature: expect.any(String),
           }),
@@ -1292,34 +1239,24 @@ describe('PFS: pfsCapacityUpdateEpic', () => {
   });
 
   test("signature fail isn't fatal", async () => {
-    expect.assertions(2);
+    expect.assertions(3);
 
-    const deposit = bigNumberify(500) as UInt<32>;
+    const [raiden, partner] = await makeRaidens(2);
+    await ensureChannelIsOpen([raiden, partner]);
 
-    const signerSpy = jest.spyOn(depsMock.signer, 'signMessage');
-    signerSpy.mockRejectedValueOnce(new Error('Signature rejected'));
+    const signerSpy = jest
+      .spyOn(raiden.deps.signer, 'signMessage')
+      .mockRejectedValue(new Error('signature rejected'));
+    await ensureChannelIsDeposited([raiden, partner], deposit);
 
-    const promise = pfsCapacityUpdateEpic(action$, state$, depsMock).toPromise();
-
-    action$.next(
-      channelDeposit.success(
-        {
-          id: channelId,
-          participant: depsMock.address,
-          totalDeposit: deposit,
-          txHash,
-          txBlock: openBlock + 1,
-          confirmed: true,
-        },
-        { tokenNetwork, partner },
+    expect(raiden.output).not.toContainEqual(
+      messageGlobalSend(
+        { message: expect.objectContaining({ type: MessageType.PFS_CAPACITY_UPDATE }) },
+        expect.anything(),
       ),
     );
-    setTimeout(() => action$.complete(), 10);
-
-    await expect(promise).resolves.toBeUndefined();
-
+    expect(raiden.started).toBe(true);
     expect(signerSpy).toHaveBeenCalledTimes(1);
-    signerSpy.mockRestore();
   });
 });
 
@@ -1349,7 +1286,7 @@ describe('PFS: pfsFeeUpdateEpic', () => {
       txHash,
     } = epicFixtures(depsMock));
     state$ = depsMock.latest$.pipe(pluck('state'));
-    action = channelMonitor({ id: channelId }, { tokenNetwork, partner });
+    action = channelMonitored({ id: channelId }, { tokenNetwork, partner });
 
     [
       raidenConfigUpdate({
@@ -1380,7 +1317,7 @@ describe('PFS: pfsFeeUpdateEpic', () => {
     depsMock.latest$.complete();
   });
 
-  test('success: send PFSFeeUpdate to global pfsRoom on channelMonitor', async () => {
+  test('success: send PFSFeeUpdate to global pfsRoom on channelMonitored', async () => {
     expect.assertions(1);
 
     const promise = pfsFeeUpdateEpic(action$, state$, depsMock).toPromise();
@@ -1459,29 +1396,19 @@ describe('PFS: pfsFeeUpdateEpic', () => {
 });
 
 describe('PFS: pfsServiceRegistryMonitorEpic', () => {
-  let depsMock: ReturnType<typeof raidenEpicDeps>,
-    pfsAddress: ReturnType<typeof epicFixtures>['pfsAddress'],
-    action$: ReturnType<typeof epicFixtures>['action$'],
-    state$: ReturnType<typeof epicFixtures>['state$'];
-
-  beforeEach(() => {
-    depsMock = raidenEpicDeps();
-    ({ pfsAddress, action$, state$ } = epicFixtures(depsMock));
-  });
-
-  afterAll(() => {
-    jest.clearAllMocks();
-    action$.complete();
-    state$.complete();
-    depsMock.latest$.complete();
-  });
+  const pfsAddress = makeAddress();
 
   test('success', async () => {
-    expect.assertions(2);
+    expect.assertions(1);
+
+    const raiden = await makeRaiden(undefined, false);
+    const { serviceRegistryContract } = raiden.deps;
 
     // enable config.pfs auto ('')
-    action$.next(raidenConfigUpdate({ pfs: '' }));
+    raiden.store.dispatch(raidenConfigUpdate({ pfs: '' }));
+    await raiden.start();
 
+    await waitBlock();
     const validTill = bigNumberify(Math.floor(Date.now() / 1000) + 86400), // tomorrow
       registeredEncoded = defaultAbiCoder.encode(
         ['uint256', 'uint256', 'address'],
@@ -1496,64 +1423,41 @@ describe('PFS: pfsServiceRegistryMonitorEpic', () => {
         [bigNumberify(Math.floor(Date.now() / 1000) + 1), Zero, AddressZero],
       );
 
-    await expect(depsMock.config$.pipe(pluck('pfs'), first()).toPromise()).resolves.toBe('');
-
-    const promise = pfsServiceRegistryMonitorEpic(action$, state$, depsMock)
-      .pipe(first())
-      .toPromise();
-    action$.next(raidenConfigUpdate({}));
-
     // expired
-    depsMock.provider.emit(
-      depsMock.serviceRegistryContract.filters.RegisteredService(null, null, null, null),
+    await providersEmit(
+      {},
       makeLog({
-        blockNumber: 115,
-        filter: depsMock.serviceRegistryContract.filters.RegisteredService(
-          pfsAddress,
-          null,
-          null,
-          null,
-        ),
+        filter: serviceRegistryContract.filters.RegisteredService(pfsAddress, null, null, null),
         data: expiredEncoded,
       }),
     );
+    await waitBlock();
 
     // new event from previous expired service, but now valid=true
-    depsMock.provider.emit(
-      depsMock.serviceRegistryContract.filters.RegisteredService(null, null, null, null),
+    await providersEmit(
+      {},
       makeLog({
-        blockNumber: 116,
-        filter: depsMock.serviceRegistryContract.filters.RegisteredService(
-          pfsAddress,
-          null,
-          null,
-          null,
-        ),
+        filter: serviceRegistryContract.filters.RegisteredService(pfsAddress, null, null, null),
         data: registeredEncoded, // non-indexed valid_till, deposit, deposit_contract
       }),
     );
+    await waitBlock();
 
     // duplicated event, but valid
-    depsMock.provider.emit(
-      depsMock.serviceRegistryContract.filters.RegisteredService(null, null, null, null),
+    await providersEmit(
+      {},
       makeLog({
-        blockNumber: 116,
-        filter: depsMock.serviceRegistryContract.filters.RegisteredService(
-          pfsAddress,
-          null,
-          null,
-          null,
-        ),
+        filter: serviceRegistryContract.filters.RegisteredService(pfsAddress, null, null, null),
         data: registeredEncoded, // non-indexed valid_till, deposit, deposit_contract
       }),
     );
+    await waitBlock();
 
     // expires while waiting, doesn't make it to the list
-    depsMock.provider.emit(
-      depsMock.serviceRegistryContract.filters.RegisteredService(null, null, null, null),
+    await providersEmit(
+      {},
       makeLog({
-        blockNumber: 117,
-        filter: depsMock.serviceRegistryContract.filters.RegisteredService(
+        filter: serviceRegistryContract.filters.RegisteredService(
           '0x0700000000000000000000000000000000000006',
           null,
           null,
@@ -1562,13 +1466,25 @@ describe('PFS: pfsServiceRegistryMonitorEpic', () => {
         data: expiringSoonEncoded,
       }),
     );
+    await waitBlock();
 
-    await expect(promise).resolves.toEqual(pfsListUpdated({ pfsList: [pfsAddress] }));
+    await expect(
+      raiden.deps.latest$
+        .pipe(
+          pluck('pfsList'),
+          first((l) => l.length > 0),
+        )
+        .toPromise(),
+    ).resolves.toContainEqual(pfsAddress);
   });
 
   test('noop if config.pfs is set', async () => {
     expect.assertions(2);
-    await expect(depsMock.config$.pipe(pluck('pfs'), first()).toPromise()).resolves.toBeDefined();
+
+    const raiden = await makeRaiden();
+    const { serviceRegistryContract } = raiden.deps;
+
+    expect(raiden.config.pfs).toBeDefined();
 
     const validTill = bigNumberify(Math.floor(Date.now() / 1000) + 86400), // tomorrow
       registeredEncoded = defaultAbiCoder.encode(
@@ -1576,25 +1492,16 @@ describe('PFS: pfsServiceRegistryMonitorEpic', () => {
         [validTill, Zero, AddressZero],
       );
 
-    const promise = pfsServiceRegistryMonitorEpic(EMPTY, state$, depsMock)
-      .pipe(takeUntil(timer(1500)))
-      .toPromise();
-
-    depsMock.provider.emit(
-      depsMock.serviceRegistryContract.filters.RegisteredService(null, null, null, null),
+    await providersEmit(
+      {},
       makeLog({
-        blockNumber: 116,
-        filter: depsMock.serviceRegistryContract.filters.RegisteredService(
-          pfsAddress,
-          null,
-          null,
-          null,
-        ),
+        filter: serviceRegistryContract.filters.RegisteredService(pfsAddress, null, null, null),
         data: registeredEncoded, // non-indexed valid_till, deposit, deposit_contract
       }),
     );
+    await waitBlock();
 
-    await expect(promise).resolves.toBeUndefined();
+    expect(raiden.output).not.toContainEqual(pfsListUpdated(expect.anything()));
   });
 });
 

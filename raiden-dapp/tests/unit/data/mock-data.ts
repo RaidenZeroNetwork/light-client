@@ -6,11 +6,12 @@ import {
   Address,
   ChannelState,
   RaidenChannel,
-  RaidenChannels
+  RaidenChannels,
 } from 'raiden-ts';
 import { Route } from 'vue-router';
 import { RouteNames } from '@/router/route-names';
 import { Tokens } from '@/types';
+import { Notification } from '@/store/notifications/types';
 
 export const paymentId = new BigNumber(4444);
 
@@ -20,7 +21,7 @@ export class TestData {
     decimals: 5,
     balance: parseUnits('1.2', 5),
     name: 'TestToken',
-    symbol: 'TTT'
+    symbol: 'TTT',
   };
 
   static openChannel: RaidenChannel = {
@@ -34,7 +35,7 @@ export class TestData {
     tokenNetwork: '0x111157460c0F41EfD9107239B7864c062aA8B978' as Address,
     ownDeposit: new BigNumber(10 ** 8),
     balance: Zero,
-    capacity: new BigNumber(10 ** 8)
+    capacity: new BigNumber(10 ** 8),
   };
 
   static settlingChannel: RaidenChannel = {
@@ -48,7 +49,7 @@ export class TestData {
     tokenNetwork: '0x111157460c0F41EfD9107239B7864c062aA8B978' as Address,
     ownDeposit: new BigNumber(10 ** 8),
     balance: Zero,
-    capacity: new BigNumber(10 ** 8)
+    capacity: new BigNumber(10 ** 8),
   };
 
   static settlableChannel: RaidenChannel = {
@@ -62,7 +63,7 @@ export class TestData {
     tokenNetwork: '0x111157460c0F41EfD9107239B7864c062aA8B978' as Address,
     ownDeposit: new BigNumber(10 ** 8),
     balance: Zero,
-    capacity: new BigNumber(10 ** 8)
+    capacity: new BigNumber(10 ** 8),
   };
 
   static closedChannel: RaidenChannel = {
@@ -76,21 +77,21 @@ export class TestData {
     tokenNetwork: '0x111157460c0F41EfD9107239B7864c062aA8B978' as Address,
     ownDeposit: new BigNumber(10 ** 8),
     balance: Zero,
-    capacity: new BigNumber(10 ** 8)
+    capacity: new BigNumber(10 ** 8),
   };
 
   static mockChannelArray = [
     TestData.openChannel,
     TestData.settlingChannel,
     TestData.settlableChannel,
-    TestData.closedChannel
+    TestData.closedChannel,
   ];
 
   static mockChannels: RaidenChannels = {
     '0xd0A1E359811322d97991E03f863a0C30C2cF029C': {
       '0x1D36124C90f53d491b6832F1c073F43E2550E35b': TestData.openChannel,
-      '0x82641569b2062B545431cF6D7F0A418582865ba7': TestData.settlingChannel
-    }
+      '0x82641569b2062B545431cF6D7F0A418582865ba7': TestData.settlingChannel,
+    },
   };
 
   static mockTokens: Tokens = {
@@ -99,8 +100,8 @@ export class TestData {
       decimals: 5,
       balance: parseUnits('1.2', 5),
       name: 'TestToken',
-      symbol: 'TTT'
-    } as Token
+      symbol: 'TTT',
+    } as Token,
   };
 
   static mockRoute(
@@ -116,7 +117,7 @@ export class TestData {
       params,
       query: {},
       name: name,
-      meta: meta
+      meta: meta,
     };
   }
 
@@ -129,10 +130,10 @@ export class TestData {
       decimals: 5,
       balance: parseUnits('1.2', 5),
       name: 'TestToken',
-      symbol: 'TTT'
+      symbol: 'TTT',
     } as Token,
     transferTotal: new BigNumber(10 ** 8),
-    paymentId
+    paymentId,
   };
 
   static mockMediatedTransfer: Transfer = {
@@ -143,7 +144,7 @@ export class TestData {
       decimals: 5,
       balance: parseUnits('1.2', 5),
       name: 'TestToken',
-      symbol: 'TTT'
+      symbol: 'TTT',
     } as Token,
     transferTotal: new BigNumber(10 ** 8),
     hops: 1,
@@ -154,9 +155,16 @@ export class TestData {
       decimals: 5,
       balance: parseUnits('1.2', 5),
       name: 'Service Token',
-      symbol: 'SVT'
+      symbol: 'SVT',
     } as Token,
     pfsAddress: 'https://pfsadr.org',
-    paymentId
+    paymentId,
+  };
+
+  static notifications: Notification = {
+    id: 1,
+    title: 'BALANCE PROOF SUBMITTED',
+    description: 'The monitoring service has submitted a balance proof.',
+    received: new Date('June 5, 1986'),
   };
 }

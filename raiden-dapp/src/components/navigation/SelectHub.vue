@@ -16,7 +16,7 @@
         <span
           class="udc-balance__amount"
           :class="{
-            'low-balance': !hasEnoughServiceTokens
+            'low-balance': !hasEnoughServiceTokens,
           }"
         >
           <amount-display
@@ -38,7 +38,7 @@
               icon
               x-large
               class="udc-balance__deposit"
-              @click="showMintDeposit = true"
+              @click="showUdcDeposit = true"
               v-on="on"
             >
               <v-icon color="primary">play_for_work</v-icon>
@@ -46,15 +46,20 @@
           </template>
           <span>
             {{
-              $t('select-hub.service-token-tooltip', {
-                token: udcToken.symbol || 'SVT'
-              })
+              $t(
+                mainnet
+                  ? 'select-hub.service-token-tooltip-main'
+                  : 'select-hub.service-token-tooltip',
+                {
+                  token: serviceToken,
+                }
+              )
             }}
           </span>
         </v-tooltip>
-        <mint-deposit-dialog
-          :visible="showMintDeposit"
-          @cancel="showMintDeposit = false"
+        <udc-deposit-dialog
+          :visible="showUdcDeposit"
+          @cancel="showUdcDeposit = false"
           @done="mintDone()"
         />
       </v-col>
@@ -67,7 +72,7 @@
         >
           {{
             $t('select-hub.service-token-balance-too-low', {
-              token: udcToken.symbol || 'SVT'
+              token: serviceToken,
             })
           }}
         </span>
@@ -112,7 +117,7 @@ import NavigationMixin from '@/mixins/navigation-mixin';
 import Divider from '@/components/Divider.vue';
 import TokenInformation from '@/components/TokenInformation.vue';
 import ActionButton from '@/components/ActionButton.vue';
-import MintDepositDialog from '@/components/dialogs/MintDepositDialog.vue';
+import UdcDepositDialog from '@/components/dialogs/UdcDepositDialog.vue';
 
 @Component({
   components: {
@@ -120,25 +125,29 @@ import MintDepositDialog from '@/components/dialogs/MintDepositDialog.vue';
     Divider,
     AddressInput,
     ActionButton,
-    MintDepositDialog,
-    AmountDisplay
+    UdcDepositDialog,
+    AmountDisplay,
   },
   computed: {
     ...mapState(['defaultAccount', 'channels', 'network']),
     ...mapGetters({
-      getToken: 'token'
-    })
-  }
+      getToken: 'token',
+      mainnet: 'mainnet',
+      udcToken: 'udcToken',
+    }),
+  },
 })
 export default class SelectHub extends Mixins(NavigationMixin) {
   defaultAccount!: string;
   channels!: RaidenChannels;
   network!: Network;
   getToken!: (address: string) => Token;
+  mainnet!: boolean;
+  udcToken!: Token;
 
   partner = '';
   valid = true;
-  showMintDeposit = false;
+  showUdcDeposit = false;
   udcCapacity = Zero;
   hasEnoughServiceTokens = false;
 
@@ -156,14 +165,12 @@ export default class SelectHub extends Mixins(NavigationMixin) {
   }
 
   private async updateUDCCapacity() {
-    const { userDepositTokenAddress, monitoringReward } = this.$raiden;
-    await this.$raiden.fetchTokenData([userDepositTokenAddress]);
+    const { monitoringReward } = this.$raiden;
+
     this.udcCapacity = await this.$raiden.getUDCCapacity();
-    if (monitoringReward && this.udcCapacity.gte(monitoringReward)) {
-      this.hasEnoughServiceTokens = true;
-    } else {
-      this.hasEnoughServiceTokens = false;
-    }
+    this.hasEnoughServiceTokens = !!(
+      monitoringReward && this.udcCapacity.gte(monitoringReward)
+    );
   }
 
   get isConnectedToHub() {
@@ -171,11 +178,8 @@ export default class SelectHub extends Mixins(NavigationMixin) {
     return !isEmpty(this.channels[address]);
   }
 
-  get udcToken(): Token {
-    const address = this.$raiden.userDepositTokenAddress;
-    return (
-      this.$store.state.tokens[address] || ({ address, symbol: 'SVT' } as Token)
-    );
+  get serviceToken(): string {
+    return this.udcToken.symbol ?? (this.mainnet ? 'RDN' : 'SVT');
   }
 
   async created() {
@@ -191,6 +195,8 @@ export default class SelectHub extends Mixins(NavigationMixin) {
       this.navigateToHome();
     }
 
+    await this.$raiden.monitorToken(address);
+
     // On goerli, we can suggest our hub if the user is not connected yet
     if (!this.isConnectedToHub && this.network.name === 'goerli') {
       this.partner = process.env.VUE_APP_HUB ?? '';
@@ -198,7 +204,7 @@ export default class SelectHub extends Mixins(NavigationMixin) {
   }
 
   async mintDone() {
-    this.showMintDeposit = false;
+    this.showUdcDeposit = false;
     await this.updateUDCCapacity();
   }
 }

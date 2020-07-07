@@ -1,6 +1,5 @@
-/* eslint-disable @typescript-eslint/camelcase */
 import * as t from 'io-ts';
-import { defer, EMPTY, from, merge, Observable, of, combineLatest } from 'rxjs';
+import { defer, EMPTY, from, merge, Observable, of, combineLatest, timer } from 'rxjs';
 import {
   catchError,
   concatMap,
@@ -19,13 +18,15 @@ import {
   timeout,
   withLatestFrom,
   exhaustMap,
-  skip,
   take,
+  mapTo,
+  debounce,
+  pairwise,
 } from 'rxjs/operators';
 import { fromFetch } from 'rxjs/fetch';
 import { Event } from 'ethers/contract';
 import { BigNumber, bigNumberify, toUtf8Bytes, verifyMessage, concat } from 'ethers/utils';
-import { Two, Zero, WeiPerEther } from 'ethers/constants';
+import { Two, Zero, MaxUint256, WeiPerEther } from 'ethers/constants';
 import memoize from 'lodash/memoize';
 
 import { UserDeposit } from '../contracts/UserDeposit';
@@ -36,15 +37,26 @@ import { messageGlobalSend } from '../messages/actions';
 import { MessageType, PFSCapacityUpdate, PFSFeeUpdate, MonitorRequest } from '../messages/types';
 import { MessageTypeId, signMessage, createBalanceHash } from '../messages/utils';
 import { ChannelState, Channel } from '../channels/state';
-import { channelAmounts, groupChannel$ } from '../channels/utils';
-import { Address, decode, Int, Signature, Signed, UInt } from '../utils/types';
+import { assertTx, channelAmounts, groupChannel$ } from '../channels/utils';
+import { Address, decode, Int, Signature, Signed, UInt, isntNil, Hash } from '../utils/types';
 import { isActionOf } from '../utils/actions';
 import { encode, losslessParse, losslessStringify } from '../utils/data';
 import { getEventsStream } from '../utils/ethers';
-import { RaidenError, ErrorCodes } from '../utils/error';
+import { RaidenError, ErrorCodes, assert } from '../utils/error';
 import { pluckDistinct } from '../utils/rx';
 import { Capabilities } from '../constants';
-import { iouClear, pathFind, iouPersist, pfsListUpdated, udcDeposited } from './actions';
+import { getContractWithSigner } from '../helpers';
+
+import {
+  iouClear,
+  pathFind,
+  iouPersist,
+  pfsListUpdated,
+  udcDeposited,
+  udcWithdraw,
+  udcWithdrawn,
+  msBalanceProofSent,
+} from './actions';
 import { channelCanRoute, pfsInfo, pfsListInfo, packIOU, signIOU } from './utils';
 import { IOU, LastIOUResults, PathResults, Paths, PFS } from './types';
 
@@ -60,7 +72,6 @@ const oneToNAddress = memoize(
  */
 const PathError = t.readonly(
   t.type({
-    /* eslint-disable-next-line @typescript-eslint/camelcase */
     error_code: t.number,
     errors: t.string,
   }),
@@ -200,9 +211,9 @@ export const pathFindServiceEpic = (
                 ? // first, use action.payload.pfs as is, if present
                   of(action.payload.pfs)
                 : configPfs
-                ? // or if config.pfs isn't disabled (null) nor auto (''), fetch & use it
+                ? // or if config.pfs isn't disabled (null) nor auto (''|undefined), fetch & use it
                   pfsInfo(configPfs, deps)
-                : // else (action unset, config.pfs=''=auto mode)
+                : // else (action unset, config.pfs=''|undefined=auto mode)
                   latest$.pipe(
                     pluck('pfsList'), // get cached pfsList
                     // if needed, wait for list to be populated
@@ -362,28 +373,33 @@ export const pathFindServiceEpic = (
  * @param deps.address - Our address
  * @param deps.network - Current Network
  * @param deps.signer - Signer instance
- * @param deps.latest$ - Latest observable
  * @param deps.config$ - Config observable
  * @returns Observable of messageGlobalSend actions
  */
 export const pfsCapacityUpdateEpic = (
   {}: Observable<RaidenAction>,
-  {}: Observable<RaidenState>,
-  { log, address, network, signer, latest$, config$ }: RaidenEpicDeps,
+  state$: Observable<RaidenState>,
+  { log, address, network, signer, config$ }: RaidenEpicDeps,
 ): Observable<messageGlobalSend> =>
-  latest$.pipe(
-    pluck('state'),
+  state$.pipe(
     groupChannel$,
-    withLatestFrom(config$),
-    mergeMap(([grouped$, { httpTimeout }]) =>
+    mergeMap((grouped$) =>
       grouped$.pipe(
+        pairwise(), // skips first emission on startup
         withLatestFrom(config$),
-        filter(([, { pfsRoom }]) => !!pfsRoom), // ignore actions while/if config.pfsRoom isn't set
-        debounceTime(httpTimeout / 2), // default: 15s
-        concatMap(([channel, { revealTimeout, pfsRoom }]) => {
+        // ignore actions if channel not open or while/if config.pfsRoom isn't set
+        filter(([[, channel], { pfsRoom }]) => channel.state === ChannelState.open && !!pfsRoom),
+        debounce(
+          ([[prev, cur], { httpTimeout }]) =>
+            cur.own.locks.length > prev.own.locks.length ||
+            cur.partner.locks.length > prev.partner.locks.length
+              ? // if either lock increases, a transfer is pending, debounce by httpTimeout=30s
+                timer(httpTimeout)
+              : of(1), // otherwise, deposited or a transfer completed, fires immediatelly
+        ),
+        switchMap(([[, channel], { revealTimeout, pfsRoom }]) => {
           const tokenNetwork = channel.tokenNetwork;
           const partner = channel.partner.address;
-          if (channel.state !== ChannelState.open) return EMPTY;
           const { ownCapacity, partnerCapacity } = channelAmounts(channel);
 
           const message: PFSCapacityUpdate = {
@@ -419,7 +435,7 @@ export const pfsCapacityUpdateEpic = (
  * PFSFeeUpdate to path_finding global room, so PFSs can pick us for mediation
  * TODO: Currently, we always send Zero fees; we should send correct fee data from config
  *
- * @param action$ - Observable of channelMonitor actions
+ * @param action$ - Observable of channelMonitored actions
  * @param state$ - Observable of RaidenStates
  * @param deps - Raiden epic dependencies
  * @param deps.log - Logger instance
@@ -440,10 +456,11 @@ export const pfsFeeUpdateEpic = (
     mergeMap((grouped$) => grouped$.pipe(first())),
     withLatestFrom(config$),
     // ignore actions while/if mediating not enabled
-    filter(([, { pfsRoom, caps }]) => !!pfsRoom && !caps?.[Capabilities.NO_MEDIATE]),
+    filter(
+      ([channel, { pfsRoom, caps }]) =>
+        channel.state === ChannelState.open && !!pfsRoom && !caps?.[Capabilities.NO_MEDIATE],
+    ),
     mergeMap(([channel, { pfsRoom }]) => {
-      if (channel.state !== ChannelState.open) return EMPTY;
-
       const message: PFSFeeUpdate = {
         type: MessageType.PFS_FEE_UPDATE,
         canonical_identifier: {
@@ -495,7 +512,7 @@ export const pfsServiceRegistryMonitorEpic = (
     // monitors config.pfs, and only monitors contract if it's empty
     pluckDistinct('pfs'),
     switchMap((pfs) =>
-      pfs !== ''
+      pfs !== '' && pfs !== undefined
         ? // disable ServiceRegistry monitoring if/while pfs is null=disabled or truty
           EMPTY
         : // type of elements emitted by getEventsStream (past and new events coming from contract):
@@ -557,7 +574,7 @@ export const monitorUdcBalanceEpic = (
     pluckDistinct('state', 'blockNumber'),
     // it's seems ugly to call on each block, but UserDepositContract doesn't expose deposits as
     // events, and ethers actually do that to monitor token balances, so it's equivalent
-    exhaustMap(() => userDepositContract.functions.balances(address) as Promise<UInt<32>>),
+    exhaustMap(() => userDepositContract.functions.effectiveBalance(address) as Promise<UInt<32>>),
     distinctUntilChanged((x, y) => y.eq(x)),
     map(udcDeposited),
   );
@@ -573,8 +590,8 @@ export const monitorUdcBalanceEpic = (
  * @param deps.contractsInfo - Contracts info mapping
  * @param deps.latest$ - Latest observable
  * @param deps.config$ - Config observable
- * @returns An operator which receives a ChangedChannel and RaidenConfig and returns a cold
- * Observable of messageGlobalSend actions to the global monitoring room
+ * @returns An operator which receives prev and current Channel states and returns a cold
+ *      Observable of messageGlobalSend actions to the global monitoring room
  */
 function makeMonitoringRequest$({
   address,
@@ -585,9 +602,10 @@ function makeMonitoringRequest$({
   latest$,
   config$,
 }: RaidenEpicDeps) {
-  return (channel: Channel) => {
-    const { partnerUnlocked } = channelAmounts(channel);
-    if (!partnerUnlocked.gt(Zero)) return EMPTY; // give up early if nothing to lose
+  return ([, channel]: [Channel, Channel]) => {
+    const { partnerUnlocked, ownDeposit } = channelAmounts(channel);
+    // give up early if nothing to lose
+    if (partnerUnlocked.isZero() || ownDeposit.isZero()) return EMPTY;
 
     return combineLatest([latest$, config$]).pipe(
       // combineLatest + filter ensures it'll pass if anything here changes
@@ -601,19 +619,15 @@ function makeMonitoringRequest$({
           // use partner's total off & on-chain unlocked, total we'd lose if don't update BP
           partnerUnlocked
             // use rateToSvt to convert to equivalent SVT, and pass only if > monitoringReward;
-            // default rate=0 means it'll NEVER monitor if no rate is set for token
-            .mul(rateToSvt[channel.token] ?? Zero)
+            // default rate=MaxUint256 means it'll ALWAYS monitor if no rate is set for token
+            .mul(rateToSvt[channel.token] ?? MaxUint256)
             .div(WeiPerEther)
             .gt(monitoringReward),
       ),
       take(1), // take/act on first time all conditions above pass
       mergeMap(([, { monitoringReward, monitoringRoom }]) => {
         const balanceProof = channel.partner.balanceProof;
-        const balanceHash = createBalanceHash(
-          balanceProof.transferredAmount,
-          balanceProof.lockedAmount,
-          balanceProof.locksroot,
-        );
+        const balanceHash = createBalanceHash(balanceProof);
 
         const nonClosingMessage = concat([
           encode(channel.tokenNetwork, 20),
@@ -682,18 +696,210 @@ export const monitorRequestEpic = (
       grouped$.pipe(
         // act only if partner's transferredAmount or lockedAmount changes
         distinctUntilChanged(
-          (x, y) =>
-            y.partner.balanceProof.transferredAmount.eq(
-              x.partner.balanceProof.transferredAmount,
+          (a, b) =>
+            b.partner.balanceProof.transferredAmount.eq(
+              a.partner.balanceProof.transferredAmount,
             ) &&
-            y.partner.balanceProof.lockedAmount.eq(x.partner.balanceProof.lockedAmount) &&
-            y.partner.locks === x.partner.locks,
+            b.partner.balanceProof.lockedAmount.eq(a.partner.balanceProof.lockedAmount) &&
+            b.partner.locks === a.partner.locks,
         ),
-        skip(1), // distinctUntilChanged allows first, we want to skip and act only on changes
-        debounceTime(httpTimeout / 2), // default: 15s
+        pairwise(), // distinctUntilChanged allows first, so pair and skips it
+        debounce(([prev, cur]) =>
+          // if partner lock increases, a transfer is pending, debounce by httpTimeout=30s
+          // otherwise transfer completed, emits immediately
+          cur.partner.locks.length > prev.partner.locks.length ? timer(httpTimeout) : of(1),
+        ),
         // switchMap may unsubscribe from previous udcBalance wait/signature prompts if partner's
         // balanceProof balance changes in the meantime
         switchMap(makeMonitoringRequest$(deps)),
       ),
     ),
   );
+
+export const udcWithdrawRequestEpic = (
+  action$: Observable<RaidenAction>,
+  {}: Observable<RaidenState>,
+  { userDepositContract, address, log, signer }: RaidenEpicDeps,
+): Observable<udcWithdraw.success | udcWithdraw.failure> =>
+  action$.pipe(
+    filter(udcWithdraw.request.is),
+    mergeMap((action) =>
+      userDepositContract.functions
+        .balances(address)
+        .then((balance) => [action, balance] as const),
+    ),
+    concatMap(([action, balance]) => {
+      const contract = getContractWithSigner(userDepositContract, signer);
+      const amount = action.meta.amount;
+      return defer(() => {
+        assert(amount.gt(Zero), [
+          ErrorCodes.UDC_PLAN_WITHDRAW_GT_ZERO,
+          {
+            amount: amount.toString(),
+          },
+        ]);
+
+        assert(balance.sub(amount).gte(Zero), [
+          ErrorCodes.UDC_PLAN_WITHDRAW_EXCEEDS_AVAILABLE,
+          {
+            balance: balance.toString(),
+            amount: amount.toString(),
+          },
+        ]);
+
+        return contract.functions.planWithdraw(amount);
+      }).pipe(
+        assertTx('planWithdraw', ErrorCodes.UDC_PLAN_WITHDRAW_FAILED, { log }),
+        mergeMap(({ transactionHash: txHash, blockNumber: txBlock }) =>
+          from(userDepositContract.functions.withdraw_plans(address)).pipe(
+            map(({ amount, withdraw_block }) =>
+              udcWithdraw.success(
+                {
+                  block: withdraw_block.toNumber(),
+                  txHash,
+                  txBlock,
+                  confirmed: undefined,
+                },
+                { amount: amount as UInt<32> },
+              ),
+            ),
+          ),
+        ),
+        catchError((err) => {
+          log.error('Planning udc withdraw failed', err);
+          return of(udcWithdraw.failure(err, action.meta));
+        }),
+      );
+    }),
+  );
+
+export const udcCheckWithdrawPlannedEpic = (
+  {}: Observable<RaidenAction>,
+  {}: Observable<RaidenState>,
+  { userDepositContract, address }: RaidenEpicDeps,
+): Observable<udcWithdraw.success> => {
+  return defer(() => userDepositContract.functions.withdraw_plans(address)).pipe(
+    filter((value) => value.withdraw_block.gt(Zero)),
+    map(({ amount, withdraw_block }) =>
+      udcWithdraw.success(
+        { block: withdraw_block.toNumber(), confirmed: true },
+        { amount: amount as UInt<32> },
+      ),
+    ),
+  );
+};
+
+export const udcWithdrawPlannedEpic = (
+  action$: Observable<RaidenAction>,
+  state$: Observable<RaidenState>,
+  { log, userDepositContract, address, signer }: RaidenEpicDeps,
+): Observable<udcWithdrawn | udcWithdraw.failure> => {
+  return action$.pipe(
+    filter(udcWithdraw.success.is),
+    filter((action) => action.payload.confirmed === true),
+    mergeMap((action) =>
+      state$.pipe(
+        pluck('blockNumber'),
+        first((blockNumber) => action.payload.block < blockNumber),
+        mapTo(action),
+      ),
+    ),
+    mergeMap((action) =>
+      userDepositContract.functions
+        .balances(address)
+        .then((balance) => [action, balance] as const),
+    ),
+    concatMap(([action, balance]) => {
+      const contract = getContractWithSigner(userDepositContract, signer);
+      return defer(() => {
+        assert(balance.gt(Zero), [
+          ErrorCodes.UDC_WITHDRAW_NO_BALANCE,
+          {
+            balance: balance.toString(),
+          },
+        ]);
+        return contract.functions.withdraw(action.meta.amount);
+      }).pipe(
+        assertTx('withdraw', ErrorCodes.UDC_WITHDRAW_FAILED, { log }),
+        concatMap(({ transactionHash, blockNumber }) =>
+          defer(() => contract.functions.balances(address)).pipe(
+            map((newBalance) =>
+              udcWithdrawn(
+                {
+                  withdrawal: balance.sub(newBalance) as UInt<32>,
+                  txHash: transactionHash,
+                  txBlock: blockNumber,
+                  confirmed: undefined,
+                },
+                action.meta,
+              ),
+            ),
+          ),
+        ),
+        catchError((err) => {
+          log.error('Error when processing the withdraw plan', err);
+          return of(udcWithdraw.failure(err, action.meta));
+        }),
+      );
+    }),
+  );
+};
+
+/**
+ * Monitors MonitoringService contract and fires events when an MS sent a BP in our behalf.
+ *
+ * When this epic is subscribed (startup), it fetches events since 'provider.resetEventsBlock',
+ * which is set to latest monitored block, so on startup we always pick up events that were fired
+ * while offline, and keep monitoring while online, although it isn't probable that MS would quick
+ * in while we're online, since [[channelUpdateEpic]] would update the channel ourselves.
+ *
+ * @param action$ - Observable of RaidenActions
+ * @param state$ - Observable of RaidenStates
+ * @param deps - Epics dependencies
+ * @param deps.monitoringServiceContract - MonitoringService contract instance
+ * @param deps.address - Our address
+ * @returns Observable of msBalanceProofSent actions
+ */
+export const msMonitorNewBPEpic = (
+  {}: Observable<RaidenAction>,
+  state$: Observable<RaidenState>,
+  { monitoringServiceContract, address }: RaidenEpicDeps,
+): Observable<msBalanceProofSent> => {
+  // NewBalanceProofReceived event: [tokenNetwork, channelId, reward, nonce, monitoringService, ourAddress]
+  return getEventsStream<[Address, UInt<32>, UInt<32>, UInt<8>, Address, Address, Event]>(
+    monitoringServiceContract,
+    [
+      monitoringServiceContract.filters.NewBalanceProofReceived(
+        null,
+        null,
+        null,
+        null,
+        null,
+        address,
+      ),
+    ],
+    // no fromBlock, since we want to always track since 'resetEventsBlock'
+  ).pipe(
+    // should never fail, as per filter
+    filter(([, , , , , raidenAddress]) => raidenAddress === address),
+    withLatestFrom(state$),
+    map(([[tokenNetwork, id, reward, nonce, monitoringService, , event], state]) => {
+      const channel = Object.values(state.channels)
+        .concat(Object.values(state.oldChannels))
+        .find((c) => c.tokenNetwork === tokenNetwork && id.eq(c.id));
+      if (!channel) return;
+      return msBalanceProofSent({
+        tokenNetwork,
+        partner: channel.partner.address,
+        id: channel.id,
+        reward,
+        nonce,
+        monitoringService,
+        txHash: event.transactionHash as Hash,
+        txBlock: event.blockNumber!,
+        confirmed: undefined,
+      });
+    }),
+    filter(isntNil),
+  );
+};

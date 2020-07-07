@@ -2,18 +2,18 @@ import { promises as fs } from 'fs';
 import path from 'path';
 
 import { bigNumberify } from 'ethers/utils';
-import { Zero, AddressZero, HashZero } from 'ethers/constants';
+import { Zero, AddressZero, HashZero, One } from 'ethers/constants';
 
-import { ChannelState } from 'raiden-ts/channels';
+import { ChannelState, BalanceProofZero } from 'raiden-ts/channels';
 import {
   decodeRaidenState,
   encodeRaidenState,
   RaidenState,
   CURRENT_STATE_VERSION,
 } from 'raiden-ts/state';
-import { Address, UInt, Hash } from 'raiden-ts/utils/types';
+import { Address, UInt } from 'raiden-ts/utils/types';
 import { makeDefaultConfig } from 'raiden-ts/config';
-import { SignatureZero } from 'raiden-ts/constants';
+import { SignatureZero, LocksrootZero } from 'raiden-ts/constants';
 
 describe('RaidenState codecs', () => {
   const address = '0x1111111111111111111111111111111111111111' as Address,
@@ -39,34 +39,18 @@ describe('RaidenState codecs', () => {
             deposit: bigNumberify(200) as UInt<32>,
             withdraw: Zero as UInt<32>,
             locks: [],
-            balanceProof: {
-              chainId: Zero as UInt<32>,
-              tokenNetworkAddress: AddressZero as Address,
-              channelId: Zero as UInt<32>,
-              nonce: Zero as UInt<8>,
-              transferredAmount: Zero as UInt<32>,
-              lockedAmount: Zero as UInt<32>,
-              locksroot: HashZero as Hash,
-              additionalHash: HashZero as Hash,
-              signature: SignatureZero,
-            },
+            balanceProof: BalanceProofZero,
+            withdrawRequests: [],
+            nextNonce: One as UInt<8>,
           },
           partner: {
             address: partner,
             deposit: bigNumberify(210) as UInt<32>,
             withdraw: Zero as UInt<32>,
             locks: [],
-            balanceProof: {
-              chainId: Zero as UInt<32>,
-              tokenNetworkAddress: AddressZero as Address,
-              channelId: Zero as UInt<32>,
-              nonce: Zero as UInt<8>,
-              transferredAmount: Zero as UInt<32>,
-              lockedAmount: Zero as UInt<32>,
-              locksroot: HashZero as Hash,
-              additionalHash: HashZero as Hash,
-              signature: SignatureZero,
-            },
+            balanceProof: BalanceProofZero,
+            withdrawRequests: [],
+            nextNonce: One as UInt<8>,
           },
           id: 17,
           settleTimeout: 500,
@@ -106,10 +90,12 @@ describe('RaidenState codecs', () => {
               nonce: '0',
               transferredAmount: '0',
               lockedAmount: '0',
-              locksroot: HashZero,
+              locksroot: LocksrootZero,
               additionalHash: HashZero,
               signature: SignatureZero,
             },
+            withdrawRequests: [],
+            nextNonce: '1',
           },
           partner: {
             address: partner,
@@ -123,10 +109,12 @@ describe('RaidenState codecs', () => {
               nonce: '0',
               transferredAmount: '0',
               lockedAmount: '0',
-              locksroot: HashZero,
+              locksroot: LocksrootZero,
               additionalHash: HashZero,
               signature: SignatureZero,
             },
+            withdrawRequests: [],
+            nextNonce: '1',
           },
           id: 17,
           settleTimeout: 500,
@@ -204,10 +192,12 @@ describe('RaidenState codecs', () => {
                 nonce: '0',
                 transferredAmount: '0',
                 lockedAmount: '0',
-                locksroot: HashZero,
+                locksroot: LocksrootZero,
                 additionalHash: HashZero,
                 signature: SignatureZero,
               },
+              withdrawRequests: [],
+              nextNonce: '1',
             },
             partner: {
               address: partner,
@@ -221,10 +211,12 @@ describe('RaidenState codecs', () => {
                 nonce: '0',
                 transferredAmount: '0',
                 lockedAmount: '0',
-                locksroot: HashZero,
+                locksroot: LocksrootZero,
                 additionalHash: HashZero,
                 signature: SignatureZero,
               },
+              withdrawRequests: [],
+              nextNonce: '1',
             },
             id: 17,
             settleTimeout: 500,
@@ -257,34 +249,18 @@ describe('RaidenState codecs', () => {
             deposit: bigNumberify(200),
             withdraw: Zero,
             locks: [],
-            balanceProof: {
-              chainId: Zero,
-              tokenNetworkAddress: AddressZero,
-              channelId: Zero,
-              nonce: Zero,
-              transferredAmount: Zero,
-              lockedAmount: Zero,
-              locksroot: HashZero,
-              additionalHash: HashZero,
-              signature: SignatureZero,
-            },
+            balanceProof: BalanceProofZero,
+            withdrawRequests: [],
+            nextNonce: One,
           },
           partner: {
             address: partner,
             deposit: bigNumberify(210),
             withdraw: Zero,
             locks: [],
-            balanceProof: {
-              chainId: Zero,
-              tokenNetworkAddress: AddressZero,
-              channelId: Zero,
-              nonce: Zero,
-              transferredAmount: Zero,
-              lockedAmount: Zero,
-              locksroot: HashZero,
-              additionalHash: HashZero,
-              signature: SignatureZero,
-            },
+            balanceProof: BalanceProofZero,
+            withdrawRequests: [],
+            nextNonce: One,
           },
           id: 17,
           settleTimeout: 500,

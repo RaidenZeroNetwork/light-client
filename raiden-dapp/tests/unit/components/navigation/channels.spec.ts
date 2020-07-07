@@ -15,6 +15,8 @@ import Mocked = jest.Mocked;
 import { RouteNames } from '@/router/route-names';
 import VueRouter from 'vue-router';
 
+jest.mock('@/i18n', () => jest.fn());
+
 Vue.use(Vuetify);
 Vue.use(Vuex);
 Vue.filter('displayFormat', Filters.displayFormat);
@@ -41,12 +43,12 @@ describe('Channels.vue', () => {
       mocks: {
         $router,
         $route: TestData.mockRoute({
-          token
+          token,
         }),
         $raiden,
         $identicon: $identicon(),
-        $t: (msg: string) => msg
-      }
+        $t: (msg: string) => msg,
+      },
     };
 
     if (shallow) {
@@ -85,7 +87,7 @@ describe('Channels.vue', () => {
     expect($router.push).toHaveBeenCalledTimes(1);
     expect($router.push).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: RouteNames.HOME
+        name: RouteNames.HOME,
       })
     );
   });
@@ -98,7 +100,7 @@ describe('Channels.vue', () => {
     expect($router.push).toHaveBeenCalledTimes(1);
     expect($router.push).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: RouteNames.HOME
+        name: RouteNames.HOME,
       })
     );
   });
@@ -109,14 +111,14 @@ describe('Channels.vue', () => {
     await wrapper.vm.$nextTick();
 
     expect(wrapper.vm.$data['expanded']).toMatchObject({
-      '278': true
+      '278': true,
     });
 
     wrapper.find('#channel-279').trigger('click');
     await wrapper.vm.$nextTick();
 
     expect(wrapper.vm.$data['expanded']).toMatchObject({
-      '279': false
+      '279': false,
     });
   });
 
@@ -126,14 +128,14 @@ describe('Channels.vue', () => {
     await wrapper.vm.$nextTick();
 
     expect(wrapper.vm.$data['expanded']).toMatchObject({
-      '278': true
+      '278': true,
     });
 
     wrapper.find('#channel-278').trigger('click');
     await wrapper.vm.$nextTick();
 
     expect(wrapper.vm.$data['expanded']).toMatchObject({
-      '278': false
+      '278': false,
     });
   });
 

@@ -5,7 +5,10 @@ import split from 'lodash/split';
 import capitalize from 'lodash/capitalize';
 
 export default class Filters {
-  static truncate(value: string, width: number = 12) {
+  static truncate(value?: string, width: number = 12) {
+    if (!value) {
+      return '';
+    }
     const separator = '...';
     if (value.length <= width) {
       return value;
@@ -46,7 +49,7 @@ export default class Filters {
     const [integerPart, decimalPart] = split(units, '.');
 
     if (decimalPart && decimalPart.length > 6) {
-      let newDecimal = decimalPart.substring(0, 6);
+      const newDecimal = decimalPart.substring(0, 6);
       return `≈${integerPart}.${newDecimal}`;
     } else {
       return decimals === 0 ? integerPart : units;

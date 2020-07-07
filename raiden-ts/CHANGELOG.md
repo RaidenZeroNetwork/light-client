@@ -1,9 +1,59 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+- [#1514] Fix handling of expired LockedTransfer and WithdrawRequest
+- [#1607] Fix settling when one side closes/updates with outdated BalanceProof
+- [#1637] Fix depositToUDC failing if services already have withdrawn some fees
+- [#1651] Fix PFS being disabled if passed an undefined default config
+- [#1690] Fix LockExpired with empty balanceHash verification
+- [#1698] Fix estimateGas errors on channelOpen not properly being handled
+- [#1761] Fix deposit error on openChannel not rejecting promise
+- [#1787] Fix TokenNetwork monitoring losing events
+- [#1830] Fix a nonce race when openining + depositing concurrently
+
+### Added
+- [#1374] Monitors MonitoringService contract and emit event when MS acts
+- [#1421] Adds support for withdrawing tokens from the UDC
+- [#1642] Check token's allowance before deposit and skip approve
+- [#1701] Allow parameter decoding to throw and log customized errors
+- [#1701] Add and extend error codes for user parameter validation for open channel
+- [#1711] Add and extend error codes for user parameter validation for transfer
+
+### Changed
+- [#837] Changes the action tags from camel to path format. This change affects the event types exposed through the public API.
+- [#1610] Updates smart contracts to v0.37.0 (Alderaan)
+- [#1649] Have constant error messages and codes in public Raiden API.
+- [#1657] Expose RaidenChannel's id,settleTimeout,openBlock as required properties
+- [#1708] Expose RaidenTransfer's secret as optional property
+- [#1705] All transfers become monitored per default to make receiving transfers safe
+- [#1822] Refactor and optimize TokenNetwork events monitoring: one filter per Tokennetwork
+- [#1832] Make Provider events fetching more reliable with Infura
+
+[#837]: https://github.com/raiden-network/light-client/issues/837
+[#1374]: https://github.com/raiden-network/light-client/issues/1374
+[#1421]: https://github.com/raiden-network/light-client/issues/1421
+[#1514]: https://github.com/raiden-network/light-client/issues/1514
+[#1607]: https://github.com/raiden-network/light-client/issues/1607
+[#1610]: https://github.com/raiden-network/light-client/issues/1610
+[#1637]: https://github.com/raiden-network/light-client/issues/1637
+[#1642]: https://github.com/raiden-network/light-client/issues/1642
+[#1649]: https://github.com/raiden-network/light-client/pull/1649
+[#1651]: https://github.com/raiden-network/light-client/issues/1651
+[#1657]: https://github.com/raiden-network/light-client/issues/1657
+[#1690]: https://github.com/raiden-network/light-client/issues/1690
+[#1698]: https://github.com/raiden-network/light-client/issues/1698
+[#1701]: https://github.com/raiden-network/light-client/pull/1701
+[#1708]: https://github.com/raiden-network/light-client/issues/1708
+[#1705]: https://github.com/raiden-network/light-client/issues/1705
+[#1711]: https://github.com/raiden-network/light-client/pull/1711
+[#1761]: https://github.com/raiden-network/light-client/issues/1761
+[#1787]: https://github.com/raiden-network/light-client/issues/1787
+[#1822]: https://github.com/raiden-network/light-client/pull/1822
+[#1830]: https://github.com/raiden-network/light-client/issues/1830
+[#1832]: https://github.com/raiden-network/light-client/pull/1832
 
 ## [0.9.0] - 2020-05-28
-
 ### Added
 - [#1473] Expose config$ observable
 

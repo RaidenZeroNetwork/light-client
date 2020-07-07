@@ -1,4 +1,22 @@
-/* eslint-disable @typescript-eslint/no-explicit-any,@typescript-eslint/camelcase */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import {
+  raidenEpicDeps,
+  makeLog,
+  makeRaidens,
+  providersEmit,
+  makeHash,
+  waitBlock,
+  makeRaiden,
+} from '../mocks';
+import {
+  epicFixtures,
+  ensureTransferPending,
+  secrethash,
+  secret,
+  txHash,
+  getChannel,
+} from '../fixtures';
+
 import { bigNumberify, BigNumber, keccak256, hexlify, randomBytes } from 'ethers/utils';
 import { Zero, HashZero, One } from 'ethers/constants';
 import { of, EMPTY, timer, merge } from 'rxjs';
@@ -33,7 +51,6 @@ import {
   SecretReveal,
   LockExpired,
   RefundTransfer,
-  WithdrawRequest,
 } from 'raiden-ts/messages/types';
 import { encodeJsonMessage, signMessage } from 'raiden-ts/messages/utils';
 import { messageSend, messageReceived } from 'raiden-ts/messages/actions';
@@ -49,7 +66,6 @@ import {
   transferRefunded,
   transferUnlockProcessed,
   transferExpireProcessed,
-  withdrawReceive,
   transferSecretRegister,
 } from 'raiden-ts/transfers/actions';
 import {
@@ -66,9 +82,6 @@ import {
   transferRetryMessageEpic,
   transferReceivedReplyProcessedEpic,
   transferRefundedEpic,
-  withdrawRequestReceivedEpic,
-  withdrawSendConfirmationEpic,
-  monitorSecretRegistryEpic,
   transferSuccessOnSecretRegisteredEpic,
 } from 'raiden-ts/transfers/epics';
 import { matrixPresence } from 'raiden-ts/transport/actions';
@@ -76,9 +89,6 @@ import { UInt, Address, Hash, Signed, isntNil } from 'raiden-ts/utils/types';
 import { ActionType } from 'raiden-ts/utils/actions';
 import { makeMessageId, makeSecret, getSecrethash } from 'raiden-ts/transfers/utils';
 import { Direction } from 'raiden-ts/transfers/state';
-
-import { epicFixtures } from '../fixtures';
-import { raidenEpicDeps, makeLog } from '../mocks';
 
 describe('send transfers', () => {
   let depsMock: ReturnType<typeof raidenEpicDeps>;
@@ -95,7 +105,6 @@ describe('send transfers', () => {
     paymentId: ReturnType<typeof epicFixtures>['paymentId'],
     fee: ReturnType<typeof epicFixtures>['fee'],
     paths: ReturnType<typeof epicFixtures>['paths'],
-    key: ReturnType<typeof epicFixtures>['key'],
     action$: ReturnType<typeof epicFixtures>['action$'],
     state$: ReturnType<typeof epicFixtures>['state$'];
   const direction = Direction.SENT;
@@ -116,7 +125,6 @@ describe('send transfers', () => {
       paymentId,
       fee,
       paths,
-      key,
       action$,
       state$,
     } = epicFixtures(depsMock));
@@ -266,6 +274,7 @@ describe('send transfers', () => {
                 signature: expect.any(String),
               }),
               fee,
+              partner,
             },
             { secrethash, direction },
           ),
@@ -442,6 +451,7 @@ describe('send transfers', () => {
                   message_identifier: expect.any(BigNumber),
                   signature: expect.any(String),
                 }),
+                partner,
               },
               { secrethash, direction },
             ),
@@ -618,6 +628,7 @@ describe('send transfers', () => {
                   message_identifier: expect.any(BigNumber),
                   signature: expect.any(String),
                 }),
+                partner,
               },
               { secrethash, direction },
             ),
@@ -1030,60 +1041,6 @@ describe('send transfers', () => {
       });
     });
 
-    test('monitorSecretRegistryEpic', async () => {
-      expect.assertions(3);
-
-      const secrets: transferSecretRegister.success[] = [];
-
-      monitorSecretRegistryEpic(
-        EMPTY,
-        depsMock.latest$.pipe(pluck('state')),
-        depsMock,
-      ).subscribe((a) => secrets.push(a));
-
-      // ignore unknown secrethash
-      depsMock.provider.emit(
-        '*',
-        makeLog({
-          blockNumber: 127,
-          transactionHash: txHash,
-          filter: depsMock.secretRegistryContract.filters.SecretRevealed(txHash, null),
-          data: HashZero, // non-indexed secret
-        }),
-      );
-      expect(secrets).toHaveLength(0);
-
-      // ignore register after lock expiration block
-      depsMock.provider.emit(
-        '*',
-        makeLog({
-          blockNumber: signedTransfer.lock.expiration.toNumber() + 1,
-          transactionHash: txHash,
-          filter: depsMock.secretRegistryContract.filters.SecretRevealed(secrethash, null),
-          data: secret, // non-indexed secret
-        }),
-      );
-      expect(secrets).toHaveLength(0);
-
-      const txBlock = signedTransfer.lock.expiration.toNumber() - 1;
-      // valid secrethash,emit
-      depsMock.provider.emit(
-        '*',
-        makeLog({
-          blockNumber: txBlock,
-          transactionHash: txHash,
-          filter: depsMock.secretRegistryContract.filters.SecretRevealed(secrethash, null),
-          data: secret, // non-indexed secret
-        }),
-      );
-      expect(secrets).toEqual([
-        transferSecretRegister.success(
-          { secret, txHash, txBlock, confirmed: undefined },
-          { secrethash, direction },
-        ),
-      ]);
-    });
-
     test('transferSuccessOnSecretRegisteredEpic', async () => {
       const txBlock = 127;
 
@@ -1185,7 +1142,7 @@ describe('send transfers', () => {
 
         await expect(promise).resolves.toEqual([
           matrixPresence.request(undefined, { address: partner }),
-          transferSigned({ message: signedTransfer, fee }, { secrethash, direction }),
+          transferSigned({ message: signedTransfer, fee, partner }, { secrethash, direction }),
         ]);
       });
 
@@ -1861,7 +1818,7 @@ describe('send transfers', () => {
         // success case
         await expect(promise).resolves.toEqual(
           expect.arrayContaining([
-            transferRefunded({ message: refund }, { secrethash, direction }),
+            transferRefunded({ message: refund, partner }, { secrethash, direction }),
             {
               type: transfer.failure.type,
               payload: expect.any(Error),
@@ -1881,212 +1838,96 @@ describe('send transfers', () => {
         await expect(promise2).resolves.toBeUndefined();
       });
     });
+  });
+});
 
-    describe('withdraw request', () => {
-      let partnerDeposit: UInt<32>, transferredAmount: UInt<32>, withdrawableAmount: UInt<32>;
+describe('monitorSecretRegistryEpic', () => {
+  test('unknown secret', async () => {
+    expect.assertions(1);
 
-      /* state$ holds the state when a transfer unlocked and completed */
-      beforeEach(async () => {
-        partnerDeposit = bigNumberify(30) as UInt<32>;
-        transferredAmount = value.add(fee) as UInt<32>;
-        withdrawableAmount = partnerDeposit.add(transferredAmount) as UInt<32>;
+    const raiden = await makeRaiden();
+    const { secretRegistryContract } = raiden.deps;
 
-        action$.next(
-          channelDeposit.success(
-            {
-              id: channelId,
-              participant: partner,
-              totalDeposit: partnerDeposit,
-              txHash,
-              txBlock: openBlock + 1,
-              confirmed: true,
-            },
-            { tokenNetwork, partner },
-          ),
-        );
-        await transferGenerateAndSignEnvelopeMessageEpic(
-          of(transferUnlock.request(undefined, { secrethash, direction })),
-          depsMock.latest$.pipe(pluck('state')),
-          depsMock,
-        )
-          .pipe(tap((action) => action$.next(action)))
-          .toPromise();
-      });
+    // an emitted secret which isn't of interest is ignored
+    const unknownSecret = makeSecret();
+    const txBlock = raiden.deps.provider.blockNumber;
+    await providersEmit(
+      {},
+      makeLog({
+        blockNumber: txBlock,
+        transactionHash: makeHash(),
+        filter: secretRegistryContract.filters.SecretRevealed(getSecrethash(unknownSecret), null),
+        data: unknownSecret, // non-indexed secret
+      }),
+    );
+    await waitBlock();
+    expect(raiden.output).not.toContainEqual(
+      transferSecretRegister.success(expect.anything(), expect.anything()),
+    );
+  });
 
-      test('success', async () => {
-        expect.assertions(7);
+  test('ignore expired registered block', async () => {
+    expect.assertions(1);
 
-        const request: WithdrawRequest = {
-            type: MessageType.WITHDRAW_REQUEST,
-            message_identifier: makeMessageId(),
-            chain_id: bigNumberify(depsMock.network.chainId) as UInt<32>,
-            token_network_address: tokenNetwork,
-            channel_identifier: bigNumberify(channelId) as UInt<32>,
-            participant: partner,
-            // withdrawable amount is partner.deposit + own.g
-            total_withdraw: withdrawableAmount,
-            nonce: bigNumberify(1) as UInt<8>,
-            expiration: bigNumberify(125 + 20) as UInt<32>,
-          },
-          signed = await signMessage(partnerSigner, request),
-          messageReceivedAction = messageReceived(
-            { text: encodeJsonMessage(signed), message: signed, ts: Date.now() },
-            { address: partner },
-          );
+    const [raiden, partner] = await makeRaidens(2);
+    const { secretRegistryContract } = raiden.deps;
 
-        const signerSpy = jest.spyOn(depsMock.signer, 'signMessage');
+    const sent = await ensureTransferPending([raiden, partner]);
+    await waitBlock(sent.transfer[1].lock.expiration.add(1).toNumber());
 
-        const withdrawRequestAction = await withdrawRequestReceivedEpic(
-          of(messageReceivedAction),
-        ).toPromise();
+    const txBlock = raiden.deps.provider.blockNumber;
+    await providersEmit(
+      {},
+      makeLog({
+        blockNumber: txBlock,
+        transactionHash: makeHash(),
+        filter: secretRegistryContract.filters.SecretRevealed(secrethash, null),
+        data: secret, // non-indexed secret
+      }),
+    );
+    await waitBlock();
+    expect(raiden.output).not.toContainEqual(
+      transferSecretRegister.success(expect.anything(), expect.anything()),
+    );
+  });
 
-        expect(withdrawRequestAction).toMatchObject({
-          type: withdrawReceive.request.type,
-          payload: { message: signed },
-          meta: {
-            tokenNetwork,
-            partner,
-            totalWithdraw: request.total_withdraw,
-            expiration: request.expiration.toNumber(),
-          },
-        });
+  test('success: valid register emitted', async () => {
+    expect.assertions(3);
 
-        const promise = transferGenerateAndSignEnvelopeMessageEpic(action$, state$, depsMock)
-          .pipe(toArray())
-          .toPromise();
+    const [raiden, partner] = await makeRaidens(2);
+    const { secretRegistryContract } = raiden.deps;
 
-        const statePromise = state$.toPromise();
-        [withdrawRequestAction, withdrawRequestAction].forEach((a) => action$.next(a));
-        setTimeout(() => action$.complete(), 50);
+    await ensureTransferPending([raiden, partner]);
 
-        const output = await promise;
-        const state = await statePromise;
+    const txBlock = raiden.deps.provider.blockNumber;
+    // an emitted secret which isn't of interest is ignored
+    await providersEmit(
+      {},
+      makeLog({
+        blockNumber: txBlock,
+        transactionHash: txHash,
+        filter: secretRegistryContract.filters.SecretRevealed(secrethash, null),
+        data: secret, // non-indexed secret
+      }),
+    );
+    await waitBlock();
+    await waitBlock(raiden.deps.provider.blockNumber + raiden.config.confirmationBlocks + 1);
 
-        expect(output).toHaveLength(2);
-        const payload0 = 'payload' in output[0] && output[0].payload;
-        const payload1 = 'payload' in output[1] && output[1].payload;
-        expect(payload0 && payload1).toBeTruthy();
-        expect(payload0).toEqual(payload1);
-        expect(output[0]).toEqual({
-          type: withdrawReceive.success.type,
-          payload: {
-            message: {
-              ...request,
-              type: MessageType.WITHDRAW_CONFIRMATION,
-              message_identifier: expect.any(BigNumber),
-              nonce: state.channels[key].own.balanceProof.nonce.add(1),
-              signature: expect.any(String),
-            },
-          },
-          meta: withdrawRequestAction.meta,
-        });
-
-        const withdrawConfirmationAction = output[0] as ActionType<typeof withdrawReceive.success>;
-
-        await expect(
-          withdrawSendConfirmationEpic(of(withdrawConfirmationAction)).toPromise(),
-        ).resolves.toMatchObject({
-          type: messageSend.request.type,
-          payload: { message: withdrawConfirmationAction.payload.message },
-          meta: { address: partner },
-        });
-
-        // ensure signMessage was cached
-        expect(signerSpy).toHaveBeenCalledTimes(1);
-        signerSpy.mockRestore();
-      });
-
-      test('fail with totalWithdraw larger than partner.deposit + own.g', async () => {
-        expect.assertions(1);
-
-        const request: WithdrawRequest = {
-            type: MessageType.WITHDRAW_REQUEST,
-            message_identifier: makeMessageId(),
-            chain_id: bigNumberify(depsMock.network.chainId) as UInt<32>,
-            token_network_address: tokenNetwork,
-            channel_identifier: bigNumberify(channelId) as UInt<32>,
-            participant: partner,
-            // withdrawable amount is partner.deposit + own.g
-            total_withdraw: withdrawableAmount.add(1) as UInt<32>,
-            nonce: bigNumberify(1) as UInt<8>,
-            expiration: bigNumberify(125 + 20) as UInt<32>,
-          },
-          signed = await signMessage(partnerSigner, request),
-          messageReceivedAction = messageReceived(
-            { text: encodeJsonMessage(signed), message: signed, ts: Date.now() },
-            { address: partner },
-          );
-
-        withdrawRequestReceivedEpic(action$).subscribe((a) => action$.next(a));
-        const promise = transferGenerateAndSignEnvelopeMessageEpic(
-          action$,
-          state$,
-          depsMock,
-        ).toPromise();
-
-        action$.next(messageReceivedAction);
-        action$.complete();
-
-        await expect(promise).resolves.toBeUndefined();
-      });
-
-      test('fail WithdrawRequest expired', async () => {
-        expect.assertions(1);
-
-        const request: WithdrawRequest = {
-            type: MessageType.WITHDRAW_REQUEST,
-            message_identifier: makeMessageId(),
-            chain_id: bigNumberify(depsMock.network.chainId) as UInt<32>,
-            token_network_address: tokenNetwork,
-            channel_identifier: bigNumberify(channelId) as UInt<32>,
-            participant: partner,
-            // withdrawable amount is partner.deposit + own.g
-            total_withdraw: withdrawableAmount,
-            nonce: bigNumberify(1) as UInt<8>,
-            expiration: bigNumberify(125 + 20) as UInt<32>,
-          },
-          signed = await signMessage(partnerSigner, request),
-          messageReceivedAction = messageReceived(
-            { text: encodeJsonMessage(signed), message: signed, ts: Date.now() },
-            { address: partner },
-          ),
-          action = await withdrawRequestReceivedEpic(of(messageReceivedAction)).toPromise();
-
-        action$.next(newBlock({ blockNumber: 125 + 20 + 2 }));
-
-        await expect(
-          transferGenerateAndSignEnvelopeMessageEpic(of(action), state$, depsMock).toPromise(),
-        ).resolves.toBeUndefined();
-      });
-
-      test('fail channel not open', async () => {
-        expect.assertions(1);
-
-        const request: WithdrawRequest = {
-            type: MessageType.WITHDRAW_REQUEST,
-            message_identifier: makeMessageId(),
-            chain_id: bigNumberify(depsMock.network.chainId) as UInt<32>,
-            token_network_address: tokenNetwork,
-            channel_identifier: bigNumberify(channelId) as UInt<32>,
-            participant: partner,
-            // withdrawable amount is partner.deposit + own.g
-            total_withdraw: withdrawableAmount,
-            nonce: bigNumberify(1) as UInt<8>,
-            expiration: bigNumberify(125 + 20) as UInt<32>,
-          },
-          signed = await signMessage(partnerSigner, request),
-          messageReceivedAction = messageReceived(
-            { text: encodeJsonMessage(signed), message: signed, ts: Date.now() },
-            { address: partner },
-          ),
-          action = await withdrawRequestReceivedEpic(of(messageReceivedAction)).toPromise();
-
-        action$.next(channelClose.request(undefined, { tokenNetwork, partner }));
-
-        await expect(
-          transferGenerateAndSignEnvelopeMessageEpic(of(action), state$, depsMock).toPromise(),
-        ).resolves.toBeUndefined();
-      });
-    });
+    expect(raiden.output).toContainEqual(
+      transferSecretRegister.success(
+        { secret, txHash, txBlock, confirmed: undefined },
+        { direction: Direction.SENT, secrethash },
+      ),
+    );
+    expect(raiden.store.getState().sent[secrethash].secret).toEqual([
+      expect.any(Number),
+      { value: secret, registerBlock: txBlock },
+    ]);
+    expect(getChannel(raiden, partner).own.locks).toContainEqual(
+      expect.objectContaining({
+        secrethash,
+        registered: true,
+      }),
+    );
   });
 });

@@ -1,6 +1,5 @@
-/* eslint-disable @typescript-eslint/camelcase */
 import { timer } from 'rxjs';
-import { first, filter, takeUntil } from 'rxjs/operators';
+import { first, filter, takeUntil, take, toArray } from 'rxjs/operators';
 import { Zero, MaxUint256 } from 'ethers/constants';
 import { parseEther, parseUnits, bigNumberify, BigNumber, keccak256, Network } from 'ethers/utils';
 
@@ -26,10 +25,10 @@ import 'raiden-ts/polyfills';
 import { Raiden } from 'raiden-ts/raiden';
 import { ShutdownReason } from 'raiden-ts/constants';
 import { makeInitialState, RaidenState } from 'raiden-ts/state';
-import { raidenShutdown, ConfirmableActions } from 'raiden-ts/actions';
+import { raidenShutdown, ConfirmableAction } from 'raiden-ts/actions';
 import { newBlock, tokenMonitored } from 'raiden-ts/channels/actions';
 import { ChannelState } from 'raiden-ts/channels/state';
-import { Storage, Secret, Address } from 'raiden-ts/utils/types';
+import { Storage, Secret, Address, UInt } from 'raiden-ts/utils/types';
 import { isActionOf } from 'raiden-ts/utils/actions';
 import { ContractsInfo } from 'raiden-ts/types';
 import { PartialRaidenConfig } from 'raiden-ts/config';
@@ -40,6 +39,8 @@ import { losslessStringify } from 'raiden-ts/utils/data';
 import { ServiceRegistryFactory } from 'raiden-ts/contracts/ServiceRegistryFactory';
 import { ErrorCodes } from 'raiden-ts/utils/error';
 import { channelKey } from 'raiden-ts/channels/utils';
+import { confirmationBlocks } from '../unit/fixtures';
+import { udcWithdrawn } from 'raiden-ts/services/actions';
 
 describe('Raiden', () => {
   const provider = new TestProvider();
@@ -82,7 +83,7 @@ describe('Raiden', () => {
     );
     raiden.action$
       .pipe(
-        filter(isActionOf(ConfirmableActions)),
+        filter(ConfirmableAction.is),
         filter((a) => a.payload.confirmed === undefined),
       )
       .subscribe((a) =>
@@ -481,6 +482,8 @@ describe('Raiden', () => {
       raiden.state$.subscribe((state) => (raidenState = state));
       raiden.start();
 
+      await provider.mine(5);
+
       // ensure after hot boot, state is rehydrated and contains (only) previous token
       expect(raidenState).toBeDefined();
       expect(raidenState!.tokens).toEqual({ [token]: tokenNetwork });
@@ -632,11 +635,13 @@ describe('Raiden', () => {
       await expect(raiden.monitorToken(token)).resolves.toBe(tokenNetwork);
 
       await expect(promise).resolves.toEqual(
-        tokenMonitored({
-          fromBlock: expect.any(Number),
-          token: token as Address,
-          tokenNetwork: tokenNetwork as Address,
-        }),
+        tokenMonitored(
+          expect.objectContaining({
+            fromBlock: expect.any(Number),
+            token: token as Address,
+            tokenNetwork: tokenNetwork as Address,
+          }),
+        ),
       );
 
       // while partner is not yet initialized, open a channel with them
@@ -653,11 +658,13 @@ describe('Raiden', () => {
       // promise1, contrary to promise, should resolve at initialization, upon first scan
       // detects tokenNetwork as being of interest for having a channel with parner
       await expect(promise1).resolves.toEqual(
-        tokenMonitored({
-          fromBlock: expect.any(Number),
-          token: token as Address,
-          tokenNetwork: tokenNetwork as Address,
-        }),
+        tokenMonitored(
+          expect.objectContaining({
+            fromBlock: expect.any(Number),
+            token: token as Address,
+            tokenNetwork: tokenNetwork as Address,
+          }),
+        ),
       );
 
       raiden1.stop();
@@ -712,7 +719,7 @@ describe('Raiden', () => {
     test('invalid amount', async () => {
       expect.assertions(1);
       await expect(raiden.transfer(token, partner, -1)).rejects.toThrowError(
-        /Invalid value.*UInt/i,
+        /Invalid amount parameter./i,
       );
     });
 
@@ -742,7 +749,7 @@ describe('Raiden', () => {
     test('invalid provided paymentId', async () => {
       expect.assertions(1);
       await expect(raiden.transfer(token, partner, 23, { paymentId: -1 })).rejects.toThrowError(
-        /Invalid value.*UInt/i,
+        /Invalid payment identifier parameter./i,
       );
     });
 
@@ -752,7 +759,7 @@ describe('Raiden', () => {
         raiden.transfer(token, partner, 23, {
           paths: [{ path: ['0xnotAnAddress'], fee: 0 }],
         }),
-      ).rejects.toThrowError(/Invalid value.*Address/i);
+      ).rejects.toThrowError(/Invalid path parameter./i);
     });
 
     test('target not available', async () => {
@@ -862,12 +869,9 @@ describe('Raiden', () => {
         const result = {
           result: [
             // first returned route is invalid and should be filtered
-            // eslint-disable-next-line @typescript-eslint/camelcase
             { path: [tokenNetwork, target], estimated_fee: 0 },
-            // eslint-disable-next-line @typescript-eslint/camelcase
             { path: [partner, target], estimated_fee: 0 },
           ],
-          // eslint-disable-next-line @typescript-eslint/camelcase
           feedback_token: '0xfeedback',
         };
         fetch.mockResolvedValueOnce({
@@ -906,7 +910,7 @@ describe('Raiden', () => {
       expect.assertions(1);
 
       raiden.updateConfig({ pfs: null }); // disabled pfs
-      await expect(raiden.findPFS()).rejects.toThrowError('PFS disabled in config');
+      await expect(raiden.findPFS()).rejects.toThrowError('disabled');
     });
 
     test('success: config.pfs set', async () => {
@@ -1024,12 +1028,9 @@ describe('Raiden', () => {
       const result = {
         result: [
           // first returned route is invalid and should be filtered
-          // eslint-disable-next-line @typescript-eslint/camelcase
           { path: [tokenNetwork, target], estimated_fee: 0 },
-          // eslint-disable-next-line @typescript-eslint/camelcase
           { path: [raiden.address, partner, target], estimated_fee: 0 },
         ],
-        // eslint-disable-next-line @typescript-eslint/camelcase
         feedback_token: '0xfeedback',
       };
       fetch.mockResolvedValueOnce({
@@ -1085,12 +1086,9 @@ describe('Raiden', () => {
       const result = {
         result: [
           // first returned route is invalid and should be filtered
-          // eslint-disable-next-line @typescript-eslint/camelcase
           { path: [tokenNetwork, target], estimated_fee: 0 },
-          // eslint-disable-next-line @typescript-eslint/camelcase
           { path: [raiden.address, partner, target], estimated_fee: 0 },
         ],
-        // eslint-disable-next-line @typescript-eslint/camelcase
         feedback_token: '0xfeedback',
       };
       fetch.mockResolvedValueOnce({
@@ -1142,12 +1140,9 @@ describe('Raiden', () => {
       const result = {
         result: [
           // first returned route is invalid and should be filtered
-          // eslint-disable-next-line @typescript-eslint/camelcase
           { path: [tokenNetwork, target], estimated_fee: 0 },
-          // eslint-disable-next-line @typescript-eslint/camelcase
           { path: [raiden.address, partner, target], estimated_fee: 0 },
         ],
-        // eslint-disable-next-line @typescript-eslint/camelcase
         feedback_token: '0xfeedback',
       };
       fetch.mockResolvedValueOnce({
@@ -1203,21 +1198,87 @@ describe('Raiden', () => {
     });
   });
 
-  describe('depositToUDC', () => {
+  describe('UDC', () => {
     test('deposit 0 tokens', async () => {
       expect.assertions(1);
-      await expect(raiden.depositToUDC(0)).rejects.toThrow('Please deposit a positive amount.');
+      await expect(raiden.depositToUDC(0)).rejects.toThrow('positive');
     });
 
     test('deposit without a token balance', async () => {
       expect.assertions(1);
-      await expect(raiden.depositToUDC(100)).rejects.toThrow('Insufficient token balance (0).');
+      await expect(raiden.depositToUDC(100)).rejects.toThrow('Insufficient balance');
     });
 
     test('deposit success', async () => {
       expect.assertions(1);
       await raiden.mint(await raiden.userDepositTokenAddress(), 10);
       await expect(raiden.depositToUDC(10)).resolves.toMatch(/^0x[0-9a-fA-F]{64}$/);
+    });
+
+    test('withdraw success', async () => {
+      expect.assertions(5);
+      const deposit = bigNumberify(100) as UInt<32>;
+      const withdraw = bigNumberify(80) as UInt<32>;
+      await raiden.mint(await raiden.userDepositTokenAddress(), deposit);
+      await expect(raiden.depositToUDC(deposit)).resolves.toMatch(/^0x[0-9a-fA-F]{64}$/);
+      await expect(raiden.getUDCCapacity()).resolves.toEqual(deposit);
+      await expect(raiden.planUdcWithdraw(withdraw)).resolves.toMatch(/^0x[0-9a-fA-F]{64}$/);
+
+      const result = raiden.action$.pipe(filter(udcWithdrawn.is), take(2), toArray()).toPromise();
+      await provider.mine(100 + confirmationBlocks * 2);
+
+      await expect(raiden.getUDCCapacity()).resolves.toEqual(deposit.sub(withdraw));
+      await expect(result).resolves.toEqual([
+        udcWithdrawn(expect.objectContaining({ withdrawal: withdraw, confirmed: undefined }), {
+          amount: withdraw,
+        }),
+        udcWithdrawn(expect.objectContaining({ withdrawal: withdraw, confirmed: true }), {
+          amount: withdraw,
+        }),
+      ]);
+    });
+
+    test('withdraw success with restart', async () => {
+      expect.assertions(5);
+      const deposit = bigNumberify(100) as UInt<32>;
+      const withdraw = bigNumberify(80) as UInt<32>;
+      await raiden.mint(await raiden.userDepositTokenAddress(), deposit);
+      await expect(raiden.depositToUDC(deposit)).resolves.toMatch(/^0x[0-9a-fA-F]{64}$/);
+      await expect(raiden.getUDCCapacity()).resolves.toEqual(deposit);
+      await expect(raiden.planUdcWithdraw(withdraw)).resolves.toMatch(/^0x[0-9a-fA-F]{64}$/);
+
+      // stop and restart node
+      raiden.stop();
+      await provider.mine(confirmationBlocks);
+      raiden = await createRaiden(0, storage);
+      raiden.start();
+
+      const result = raiden.action$.pipe(filter(udcWithdrawn.is), take(2), toArray()).toPromise();
+      await provider.mine(100 + confirmationBlocks);
+
+      await expect(raiden.getUDCCapacity()).resolves.toEqual(deposit.sub(withdraw));
+      await expect(result).resolves.toEqual([
+        udcWithdrawn(expect.objectContaining({ withdrawal: withdraw, confirmed: undefined }), {
+          amount: withdraw,
+        }),
+        udcWithdrawn(expect.objectContaining({ withdrawal: withdraw, confirmed: true }), {
+          amount: withdraw,
+        }),
+      ]);
+    });
+
+    test('withdraw failure zero amount', async () => {
+      expect.assertions(1);
+      await expect(raiden.planUdcWithdraw(0)).rejects.toThrow(
+        'The planned withdraw amount has to be greater than zero.',
+      );
+    });
+
+    test('withdraw failure zero balance', async () => {
+      expect.assertions(1);
+      await expect(raiden.planUdcWithdraw(10)).rejects.toThrow(
+        'The planned withdraw amount exceeds the total amount available for withdrawing.',
+      );
     });
   });
 

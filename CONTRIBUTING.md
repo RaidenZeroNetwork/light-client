@@ -140,23 +140,19 @@ in favor of unit tests whenever possible.
 For the sdk you have to run the following:
 
 ```bash
-$ cd raiden-ts
-$ npm run test
-
+$ pnpm run test --filter raiden-ts
 ```
 
 For the dApp:
 
 ```bash
-$ cd raiden-dapp
-$ npm run test:unit
+$ pnpm run test:unit --filter raiden-dapp
 ```
 
 Tests are split in unit tests, and integration tests. The first are faster to execute while
 the latter test the whole system but are slower to run.
 
 By default whenever you make a Pull Request the linter tests, format checks, unit tests and all the integration tests will run.
-
 
 ### Documentation
 
@@ -168,8 +164,15 @@ For an exhaustive guide read [this](http://chris.beams.io/posts/git-commit/)
 guide. It's all really good advice. Some rules that you should always follow though are:
 
 - A commit title not exceeding 50 characters
+- A scope prefix preceding the title
 - A blank line after the title (optional if there is no description)
 - A description of what the commit did (optional if the commit is really small)
+
+Since this is a mono-repository, it is required to precede a commits title with
+a scope. Such is meant to identify what the changes are relate to. Each commit
+must focus on a single scope. The scopes are namely `sdk` (`./raiden-ts`),
+`dapp` (`./raiden-dapp`) and `cli` (`./raiden-cli`). The scope takes place at
+the beginning of the title and gets followed by a colon and a space (e.g. `sdk: add new feature xyz...`).
 
 Why are these rules important? All tools that consume git repos and show you
 information treat the first 80 characters as a title. Even Github itself does
@@ -181,6 +184,7 @@ followed.
 If your pull request adds or removes a feature or eliminates a bug, then it **has to** contain a change log entry as well. We use the [keep a changelog format](https://keepachangelog.com/en/1.0.0/) for ours.
 
 We maintain two separate change logs, one for the SDK and another one for the dApp. They can be found at:
+
 ```
 raiden-ts/CHANGELOG.md
 raiden-dapp/CHANGELOG.md
@@ -192,6 +196,7 @@ Please categorize your entry according to the type of your change. The most comm
 
 ```markdown
 ### Added
+
 - A bug fix
 ```
 
@@ -199,6 +204,7 @@ Please categorize your entry according to the type of your change. The most comm
 
 ```markdown
 ### Fixed
+
 - [#777] Specific behavior
 
 ...

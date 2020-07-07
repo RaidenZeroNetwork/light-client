@@ -2,13 +2,14 @@
   <v-app dark>
     <div id="application-wrapper">
       <router-view name="modal" />
+      <router-view name="notifications" />
       <div id="application-content">
         <app-header />
-        <v-content>
+        <v-main>
           <v-container fluid class="application__container fill-height">
             <router-view />
           </v-container>
-        </v-content>
+        </v-main>
       </div>
     </div>
     <div class="policy">
@@ -36,14 +37,14 @@ import ReceivingDisabledDialog from '@/components/dialogs/ReceivingDisabledDialo
 
 @Component({
   computed: {
-    ...mapGetters(['canReceive'])
+    ...mapGetters(['canReceive']),
   },
   components: {
     AppHeader,
     OfflineSnackbar,
     UpdateSnackbar,
-    ReceivingDisabledDialog
-  }
+    ReceivingDisabledDialog,
+  },
 })
 export default class App extends Mixins(NavigationMixin) {
   canReceive!: boolean;
@@ -92,7 +93,7 @@ export default class App extends Mixins(NavigationMixin) {
   }
 }
 
-.v-content {
+.v-main {
   height: calc(100% - 120px);
   margin-bottom: auto;
 }

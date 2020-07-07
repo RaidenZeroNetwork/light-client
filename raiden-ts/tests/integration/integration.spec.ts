@@ -1,7 +1,8 @@
 import { RaidenState } from 'raiden-ts/state';
-import { assert, Storage } from 'raiden-ts/utils/types';
+import { assert } from 'raiden-ts/utils';
+import { Storage } from 'raiden-ts/utils/types';
 import { Raiden } from 'raiden-ts/raiden';
-import { promises as fs } from 'fs';
+import { OpenMode, promises as fs } from 'fs';
 import { ContractsInfo } from 'raiden-ts/types';
 import { bigNumberify } from 'ethers/utils';
 import { MockStorage } from '../e2e/mocks';
@@ -30,7 +31,7 @@ async function createRaiden(
   assert(await fs.stat(deploymentInfoFile));
   assert(await fs.stat(deploymentServiceInfoFile));
 
-  const options = { encoding: 'utf8', flag: 'r' };
+  const options: { encoding: BufferEncoding; flag?: OpenMode } = { encoding: 'utf8', flag: 'r' };
 
   const deployFile = (await fs.readFile(deploymentInfoFile, options)) as string;
   const servicesDeployFile = (await fs.readFile(deploymentServiceInfoFile, options)) as string;
@@ -73,7 +74,7 @@ describe('integration', () => {
 
   afterAll((done) => {
     raiden.stop();
-    raiden.events$.pipe(filter((value) => value.type === 'raidenShutdown')).subscribe(done);
+    raiden.events$.pipe(filter((value) => value.type === 'raiden/shutdown')).subscribe(done);
   });
 
   test('account is funded', async () => {

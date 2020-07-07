@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any,@typescript-eslint/camelcase */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import * as t from 'io-ts';
 import { AddressZero } from 'ethers/constants';
 import { Network, getNetwork } from 'ethers/utils';
@@ -93,7 +93,7 @@ export function decodeRaidenState(
   try {
     return decode(RaidenState, state);
   } catch (err) {
-    log.error(`Error validating migrated state version=${state?.version}`, state);
+    log.error(`Error validating migrated state version=${state?.version}`, state, err);
     throw err;
   }
 }
@@ -108,7 +108,7 @@ type PartialState = { config?: PartialRaidenConfig } & Omit<Partial<RaidenState>
  * @param obj.network - ether's Network object for the current blockchain
  * @param obj.address - current account's address
  * @param obj.contractsInfo - ContractsInfo mapping
- * @param overwrites - A partial object to overwrite top-level properties of the returned config
+ * @param overrides - A partial object to overwrite top-level properties of the returned config
  * @returns A full config object
  */
 export function makeInitialState(
@@ -117,7 +117,7 @@ export function makeInitialState(
     address,
     contractsInfo,
   }: { network: Network; address: Address; contractsInfo: ContractsInfo },
-  overwrites: PartialState = {},
+  overrides: PartialState = {},
 ): RaidenState {
   return {
     address,
@@ -125,7 +125,6 @@ export function makeInitialState(
     chainId: network.chainId,
     registry: contractsInfo.TokenNetworkRegistry.address,
     blockNumber: contractsInfo.TokenNetworkRegistry.block_number,
-    config: overwrites.config ?? {},
     channels: {},
     oldChannels: {},
     tokens: {},
@@ -134,6 +133,8 @@ export function makeInitialState(
     received: {},
     iou: {},
     pendingTxs: [],
+    config: {},
+    ...overrides,
   };
 }
 

@@ -1,12 +1,12 @@
-import { OperatorFunction, from, Observable, ReplaySubject } from 'rxjs';
+import { OperatorFunction, Observable, ReplaySubject } from 'rxjs';
 import { tap, mergeMap, map, pluck, filter, groupBy, takeUntil } from 'rxjs/operators';
 import { Zero } from 'ethers/constants';
-import { ContractTransaction } from 'ethers/contract';
+import { ContractTransaction, ContractReceipt } from 'ethers/contract';
 
 import { RaidenState } from '../state';
 import { RaidenEpicDeps } from '../types';
-import { UInt, Hash, Address } from '../utils/types';
-import { ErrorCodes, RaidenError } from '../utils/error';
+import { UInt, Address, Hash } from '../utils/types';
+import { RaidenError } from '../utils/error';
 import { distinctRecordValues } from '../utils/rx';
 import { Channel, ChannelState } from './state';
 import { ChannelKey, ChannelUniqueKey } from './types';
@@ -40,6 +40,11 @@ export function channelUniqueKey<
   )
 >(channel: C): ChannelUniqueKey {
   return `${channel.id}#${channelKey(channel)}`;
+}
+
+// get the biggest UInt BigNumber from an array, or Zero if empty
+function bnMax<T extends UInt>(...args: T[]): T {
+  return args.reduce((a, b) => (b.gt(a) ? b : a), Zero as T);
 }
 
 /**
@@ -79,9 +84,21 @@ export function channelAmounts(channel: Channel) {
     partnerLocked = channel.partner.balanceProof.lockedAmount,
     ownBalance = partnerTransferred.sub(ownTransferred) as UInt<32>,
     partnerBalance = ownTransferred.sub(partnerTransferred) as UInt<32>, // == -ownBalance
-    ownCapacity = channel.own.deposit.sub(ownWithdraw).sub(ownLocked).add(ownBalance) as UInt<32>,
+    ownPendingWithdraw = bnMax(
+      // get maximum between actual and pending withdraws (as it's a total)
+      ownWithdraw,
+      ...channel.own.withdrawRequests.map((req) => req.total_withdraw),
+    ),
+    partnerPendingWithdraw = bnMax(
+      partnerWithdraw,
+      ...channel.partner.withdrawRequests.map((req) => req.total_withdraw),
+    ),
+    ownCapacity = channel.own.deposit
+      .sub(ownPendingWithdraw) // pending withdraws reduce capacity
+      .sub(ownLocked)
+      .add(ownBalance) as UInt<32>,
     partnerCapacity = channel.partner.deposit
-      .sub(partnerWithdraw)
+      .sub(partnerPendingWithdraw)
       .sub(partnerLocked)
       .add(partnerBalance) as UInt<32>,
     ownOnchainUnlocked = channel.own.locks
@@ -124,9 +141,12 @@ export function channelAmounts(channel: Channel) {
  */
 export function assertTx(
   method: string,
-  error: ErrorCodes,
+  error: string,
   { log }: Pick<RaidenEpicDeps, 'log'>,
-): OperatorFunction<ContractTransaction, Hash> {
+): OperatorFunction<
+  ContractTransaction,
+  ContractReceipt & { transactionHash: Hash; blockNumber: number }
+> {
   /**
    * Operator to check for tx
    *
@@ -136,15 +156,17 @@ export function assertTx(
   return (tx) =>
     tx.pipe(
       tap((tx) => log.debug(`sent ${method} tx "${tx.hash}" to "${tx.to}"`)),
-      mergeMap((tx) =>
-        from(tx.wait()).pipe(
-          map((receipt) => {
-            if (!receipt.status) throw new RaidenError(error, { transactionHash: tx.hash! });
-            log.debug(`${method} tx "${tx.hash}" successfuly mined!`);
-            return tx.hash as Hash;
-          }),
-        ),
-      ),
+      mergeMap((tx) => tx.wait()),
+      map((receipt) => {
+        if (!receipt.status || !receipt.transactionHash || !receipt.blockNumber)
+          throw new RaidenError(error, {
+            status: receipt.status ?? null,
+            transactionHash: receipt.transactionHash ?? null,
+            blockNumber: receipt.blockNumber ?? null,
+          });
+        log.debug(`${method} tx "${receipt.transactionHash}" successfuly mined!`);
+        return receipt as ContractReceipt & { transactionHash: Hash; blockNumber: number };
+      }),
     );
 }
 

@@ -1,11 +1,10 @@
-import { Zero, AddressZero, HashZero } from 'ethers/constants';
+import { Zero, AddressZero, One } from 'ethers/constants';
 
-import { UInt, Address, Hash } from '../utils/types';
-import { Reducer, createReducer, isActionOf } from '../utils/actions';
+import { UInt, Address } from '../utils/types';
+import { Reducer, createReducer } from '../utils/actions';
 import { partialCombineReducers } from '../utils/redux';
 import { RaidenState, initialState } from '../state';
-import { SignatureZero } from '../constants';
-import { RaidenAction, ConfirmableActions } from '../actions';
+import { RaidenAction, ConfirmableAction } from '../actions';
 import { transferSecretRegister } from '../transfers/actions';
 import { Direction } from '../transfers/state';
 import {
@@ -20,6 +19,7 @@ import {
 } from './actions';
 import { Channel, ChannelState, ChannelEnd } from './state';
 import { channelKey, channelUniqueKey } from './utils';
+import { BalanceProofZero } from './types';
 
 // state.blockNumber specific reducer, handles only newBlock action
 const blockNumber = createReducer(initialState.blockNumber).handle(
@@ -30,7 +30,8 @@ const blockNumber = createReducer(initialState.blockNumber).handle(
 // state.tokens specific reducer, handles only tokenMonitored action
 const tokens = createReducer(initialState.tokens).handle(
   tokenMonitored,
-  (state, { payload: { token, tokenNetwork } }) => ({ ...state, [token]: tokenNetwork }),
+  (state, { payload: { token, tokenNetwork } }) =>
+    state[token] === tokenNetwork ? state : { ...state, [token]: tokenNetwork },
 );
 
 const pendingTxs: Reducer<RaidenState['pendingTxs'], RaidenAction> = (
@@ -38,7 +39,7 @@ const pendingTxs: Reducer<RaidenState['pendingTxs'], RaidenAction> = (
   action: RaidenAction,
 ): RaidenState['pendingTxs'] => {
   // filter out non-ConfirmableActions's
-  if (!isActionOf(ConfirmableActions, action)) return state;
+  if (!ConfirmableAction.is(action)) return state;
   // if confirmed==undefined, add action to state
   else if (action.payload.confirmed === undefined) return [...state, action];
   // else (either confirmed or removed), remove from state
@@ -56,17 +57,9 @@ const emptyChannelEnd: ChannelEnd = {
   deposit: Zero as UInt<32>,
   withdraw: Zero as UInt<32>,
   locks: [],
-  balanceProof: {
-    chainId: Zero as UInt<32>,
-    tokenNetworkAddress: AddressZero as Address,
-    channelId: Zero as UInt<32>,
-    nonce: Zero as UInt<8>,
-    transferredAmount: Zero as UInt<32>,
-    lockedAmount: Zero as UInt<32>,
-    locksroot: HashZero as Hash,
-    additionalHash: HashZero as Hash,
-    signature: SignatureZero,
-  },
+  balanceProof: BalanceProofZero,
+  withdrawRequests: [],
+  nextNonce: One as UInt<8>,
 };
 
 function channelOpenSuccessReducer(state: RaidenState, action: channelOpen.success): RaidenState {
@@ -109,10 +102,16 @@ function channelUpdateOnchainBalanceStateReducer(
   let channel = state.channels[key];
   if (channel?.state !== ChannelState.open || channel.id !== action.payload.id) return state;
 
-  const [prop, total] = channelWithdrawn.is(action)
-    ? ['withdraw' as const, action.payload.totalWithdraw]
-    : ['deposit' as const, action.payload.totalDeposit];
   const end = action.payload.participant === channel.partner.address ? 'partner' : 'own';
+  const [prop, total, withdrawRequests] = channelWithdrawn.is(action)
+    ? [
+        'withdraw' as const,
+        action.payload.totalWithdraw,
+        channel[end].withdrawRequests.filter((req) =>
+          req.total_withdraw.gt(action.payload.totalWithdraw),
+        ), // on-chain withdraw clears <= WithdrawRequests, including the confirmed one
+      ]
+    : ['deposit' as const, action.payload.totalDeposit, channel[end].withdrawRequests];
 
   if (total.lte(channel[end][prop])) return state; // ignore if past event
 
@@ -121,6 +120,7 @@ function channelUpdateOnchainBalanceStateReducer(
     [end]: {
       ...channel[end],
       [prop]: total,
+      withdrawRequests,
     },
   };
   return { ...state, channels: { ...state.channels, [key]: channel } };
@@ -255,7 +255,10 @@ const completeReducer = createReducer(initialState)
  * name of the reducer. channels root reducer instead must be handled the complete state instead,
  * so it compose the output with each key/nested/combined state.
  */
-const partialReducer = partialCombineReducers({ blockNumber, tokens, pendingTxs }, initialState);
+const partialReducer = partialCombineReducers<RaidenState, RaidenAction>(
+  { blockNumber, tokens, pendingTxs },
+  initialState,
+);
 /**
  * channelsReducer is a reduce-reducers like reducer; in contract with combineReducers, which
  * gives just a specific slice of the state to the reducer (like blockNumber above, which receives

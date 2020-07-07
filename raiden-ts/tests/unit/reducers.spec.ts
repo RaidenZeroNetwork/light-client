@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/camelcase */
 import { Zero, One, AddressZero } from 'ethers/constants';
 import { bigNumberify, keccak256, getNetwork } from 'ethers/utils';
 
@@ -24,7 +23,6 @@ import {
   transferSigned,
   transferProcessed,
   transferUnlock,
-  transferClear,
   transferExpire,
   transferSecretReveal,
   transferRefunded,
@@ -888,7 +886,6 @@ describe('raidenReducer', () => {
     });
   });
 
-  /* eslint-disable @typescript-eslint/camelcase */
   describe('transfers', () => {
     const secret = keccak256('0xdeadbeef') as Secret,
       secrethash = getSecrethash(secret),
@@ -940,7 +937,7 @@ describe('raidenReducer', () => {
     test('secret register', () => {
       // normal secret register without blockNumber
       let newState = [
-        transferSigned({ message: transfer, fee }, { secrethash, direction }),
+        transferSigned({ message: transfer, fee, partner }, { secrethash, direction }),
         transferSecret({ secret }, { secrethash, direction }),
       ].reduce(raidenReducer, state);
 
@@ -976,15 +973,15 @@ describe('raidenReducer', () => {
 
     test('transfer signed', () => {
       // invalid locked
-      const message = { ...transfer, locked_amount: bigNumberify(20) as UInt<32> };
-      let newState = [transferSigned({ message, fee }, { secrethash, direction })].reduce(
+      const message = { ...transfer, nonce: bigNumberify(20) as UInt<8> };
+      let newState = [transferSigned({ message, fee, partner }, { secrethash, direction })].reduce(
         raidenReducer,
         state,
       );
       expect(newState.sent).toStrictEqual({});
 
-      message.locked_amount = transfer.locked_amount; // fix locked amount
-      newState = [transferSigned({ message, fee }, { secrethash, direction })].reduce(
+      message.nonce = transfer.nonce; // fix nonce
+      newState = [transferSigned({ message, fee, partner }, { secrethash, direction })].reduce(
         raidenReducer,
         newState,
       );
@@ -997,7 +994,10 @@ describe('raidenReducer', () => {
       // other transfer with same secretHash doesn't replace the first
       const otherMessageSameSecret = { ...message, payment_identifier: makePaymentId() };
       newState = [
-        transferSigned({ message: otherMessageSameSecret, fee }, { secrethash, direction }),
+        transferSigned(
+          { message: otherMessageSameSecret, fee, partner },
+          { secrethash, direction },
+        ),
       ].reduce(raidenReducer, newState);
       expect(newState.sent[secrethash]?.transfer?.[1]).toBe(message);
     });
@@ -1016,7 +1016,7 @@ describe('raidenReducer', () => {
       expect(newState.sent[secrethash]).toBeUndefined();
 
       newState = [
-        transferSigned({ message: transfer, fee }, { secrethash, direction }),
+        transferSigned({ message: transfer, fee, partner }, { secrethash, direction }),
         transferProcessed({ message: processed }, { secrethash, direction }),
       ].reduce(raidenReducer, state);
 
@@ -1035,7 +1035,7 @@ describe('raidenReducer', () => {
         },
         action = transferSecretRequest({ message: secretRequest }, { secrethash, direction }),
         newState = [
-          transferSigned({ message: transfer, fee }, { secrethash, direction }),
+          transferSigned({ message: transfer, fee, partner }, { secrethash, direction }),
           action,
         ].reduce(raidenReducer, state);
 
@@ -1051,7 +1051,7 @@ describe('raidenReducer', () => {
         },
         action = transferSecretReveal({ message: secretReveal }, { secrethash, direction }),
         newState = [
-          transferSigned({ message: transfer, fee }, { secrethash, direction }),
+          transferSigned({ message: transfer, fee, partner }, { secrethash, direction }),
           action,
         ].reduce(raidenReducer, state);
 
@@ -1070,35 +1070,33 @@ describe('raidenReducer', () => {
           chain_id: transfer.chain_id,
           message_identifier: makeMessageId(),
           payment_identifier: transfer.payment_identifier,
-          nonce: transfer.nonce.add(1) as UInt<8>,
+          nonce: transfer.nonce.add(2) as UInt<8>, // wrong nonce
           token_network_address: tokenNetwork,
           channel_identifier: transfer.channel_identifier,
           transferred_amount: Zero.add(transfer.lock.amount) as UInt<32>,
-          locked_amount: transfer.locked_amount, // "forgot" to decrease locked_amount
+          locked_amount: Zero as UInt<32>,
           locksroot: keccak256([]) as Hash,
           secret,
           signature: makeSignature(),
         },
-        newState = [transferUnlock.success({ message: unlock }, { secrethash, direction })].reduce(
-          raidenReducer,
-          state,
-        );
+        newState = [
+          transferUnlock.success({ message: unlock, partner }, { secrethash, direction }),
+        ].reduce(raidenReducer, state);
 
       expect(newState.sent[secrethash]).toBeUndefined();
 
       newState = [
-        transferSigned({ message: transfer, fee }, { secrethash, direction }),
-        transferUnlock.success({ message: unlock }, { secrethash, direction }),
+        transferSigned({ message: transfer, fee, partner }, { secrethash, direction }),
+        transferUnlock.success({ message: unlock, partner }, { secrethash, direction }),
       ].reduce(raidenReducer, newState);
 
-      // invalid lock because locked_amount isn't right
+      // invalid lock because nonce isn't right
       expect(newState.sent[secrethash]?.unlock).toBeUndefined();
 
-      unlock = { ...unlock, locked_amount: Zero as UInt<32> };
-      newState = [transferUnlock.success({ message: unlock }, { secrethash, direction })].reduce(
-        raidenReducer,
-        newState,
-      );
+      unlock = { ...unlock, nonce: transfer.nonce.add(1) as UInt<8> };
+      newState = [
+        transferUnlock.success({ message: unlock, partner }, { secrethash, direction }),
+      ].reduce(raidenReducer, newState);
 
       expect(newState.sent[secrethash]?.unlock?.[1]).toBe(unlock);
 
@@ -1119,33 +1117,33 @@ describe('raidenReducer', () => {
           type: MessageType.LOCK_EXPIRED,
           chain_id: transfer.chain_id,
           message_identifier: makeMessageId(),
-          nonce: transfer.nonce.add(1) as UInt<8>,
+          nonce: transfer.nonce.add(2) as UInt<8>, // invalid nonce
           token_network_address: tokenNetwork,
           channel_identifier: transfer.channel_identifier,
           transferred_amount: Zero as UInt<32>,
-          locked_amount: transfer.locked_amount, // "forgot" to decrease locked_amount
+          locked_amount: Zero as UInt<32>,
           locksroot: keccak256([]) as Hash,
           secrethash,
           recipient: partner,
           signature: makeSignature(),
         },
         newState = [
-          transferExpire.success({ message: lockExpired }, { secrethash, direction }),
+          transferExpire.success({ message: lockExpired, partner }, { secrethash, direction }),
         ].reduce(raidenReducer, state);
 
       expect(newState.sent[secrethash]).toBeUndefined();
 
       newState = [
-        transferSigned({ message: transfer, fee }, { secrethash, direction }),
-        transferExpire.success({ message: lockExpired }, { secrethash, direction }),
+        transferSigned({ message: transfer, fee, partner }, { secrethash, direction }),
+        transferExpire.success({ message: lockExpired, partner }, { secrethash, direction }),
       ].reduce(raidenReducer, newState);
 
-      // invalid lock because locked_amount isn't right
+      // invalid lock because nonce isn't right
       expect(newState.sent[secrethash]?.lockExpired).toBeUndefined();
 
-      lockExpired = { ...lockExpired, locked_amount: Zero as UInt<32> };
+      lockExpired = { ...lockExpired, nonce: transfer.nonce.add(1) as UInt<8> };
       newState = [
-        transferExpire.success({ message: lockExpired }, { secrethash, direction }),
+        transferExpire.success({ message: lockExpired, partner }, { secrethash, direction }),
       ].reduce(raidenReducer, newState);
 
       expect(newState.sent[secrethash]?.lockExpired?.[1]).toBe(lockExpired);
@@ -1182,16 +1180,15 @@ describe('raidenReducer', () => {
         metadata: { routes: [{ route: [partner] }] },
         signature: makeSignature(),
       };
-      let newState = [transferRefunded({ message: refund }, { secrethash, direction })].reduce(
-        raidenReducer,
-        state,
-      );
+      let newState = [
+        transferRefunded({ message: refund, partner }, { secrethash, direction }),
+      ].reduce(raidenReducer, state);
 
       expect(newState.sent[secrethash]).toBeUndefined();
 
       newState = [
-        transferSigned({ message: transfer, fee }, { secrethash, direction }),
-        transferRefunded({ message: refund }, { secrethash, direction }),
+        transferSigned({ message: transfer, fee, partner }, { secrethash, direction }),
+        transferRefunded({ message: refund, partner }, { secrethash, direction }),
       ].reduce(raidenReducer, newState);
 
       expect(newState.sent[secrethash]?.refund?.[1]).toBe(refund);
@@ -1199,7 +1196,7 @@ describe('raidenReducer', () => {
 
     test('transfer channel closed', () => {
       let newState = [
-        transferSigned({ message: transfer, fee }, { secrethash, direction }),
+        transferSigned({ message: transfer, fee, partner }, { secrethash, direction }),
       ].reduce(raidenReducer, state);
 
       expect(newState.sent[secrethash].transfer[1]).toBe(transfer);
@@ -1219,26 +1216,6 @@ describe('raidenReducer', () => {
       ].reduce(raidenReducer, newState);
 
       expect(newState.sent[secrethash]?.channelClosed?.[1]).toBe(txHash);
-    });
-
-    test('transfer cleared', () => {
-      let newState = [
-        transferSigned({ message: transfer, fee }, { secrethash, direction }),
-        transferSecret({ secret }, { secrethash, direction }),
-      ].reduce(raidenReducer, state);
-
-      expect(newState.sent[secrethash].transfer[1]).toBe(transfer);
-      expect(newState.sent[secrethash].secret).toStrictEqual([
-        expect.any(Number),
-        { value: secret, registerBlock: 0 },
-      ]);
-
-      newState = [transferClear(undefined, { secrethash, direction })].reduce(
-        raidenReducer,
-        newState,
-      );
-
-      expect(newState.sent[secrethash]).toBeUndefined();
     });
 
     // withdraw request is under transfer just to use its pending transfer setup/vars
@@ -1270,7 +1247,7 @@ describe('raidenReducer', () => {
           },
         ),
       );
-      expect(newState.channels[key].own.balanceProof.nonce).toEqual(One);
+      expect(newState.channels[key].own.nextNonce).toEqual(bigNumberify(2));
 
       const unlock: Signed<Unlock> = {
         type: MessageType.UNLOCK,
@@ -1288,10 +1265,10 @@ describe('raidenReducer', () => {
       };
       // now, a state with a preent own.balanceProof due to a completed transfer
       const newState1 = [
-        transferSigned({ message: transfer, fee }, { secrethash, direction }),
-        transferUnlock.success({ message: unlock }, { secrethash, direction }),
+        transferSigned({ message: transfer, fee, partner }, { secrethash, direction }),
+        transferUnlock.success({ message: unlock, partner }, { secrethash, direction }),
       ].reduce(raidenReducer, state);
-      const prevNonce = newState1.channels[key].own.balanceProof!.nonce;
+      const prevNonce = newState1.channels[key].own.nextNonce;
 
       // forgot to update nonce, reducer must be noop
       let newState2 = raidenReducer(
@@ -1328,7 +1305,7 @@ describe('raidenReducer', () => {
       );
 
       // nonce updated
-      expect(newState2.channels[key].own.balanceProof.nonce).toEqual(prevNonce.add(1));
+      expect(newState2.channels[key].own.nextNonce).toEqual(prevNonce.add(1));
     });
   });
 

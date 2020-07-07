@@ -1,6 +1,9 @@
-/* eslint-disable @typescript-eslint/no-explicit-any,@typescript-eslint/camelcase */
-import { bigNumberify, BigNumberish } from 'ethers/utils';
-import { Zero, WeiPerEther } from 'ethers/constants';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { raidenEpicDeps, makeLog, makeAddress, makeHash, makeRaidens, waitBlock } from '../mocks';
+import { epicFixtures, tokenNetwork, ensureChannelIsOpen, id } from '../fixtures';
+
+import { bigNumberify, BigNumberish, defaultAbiCoder } from 'ethers/utils';
+import { Zero, WeiPerEther, Two } from 'ethers/constants';
 import { of } from 'rxjs';
 import { first, toArray, pluck } from 'rxjs/operators';
 
@@ -20,13 +23,10 @@ import {
   getLocksroot,
 } from 'raiden-ts/transfers/utils';
 import { monitorRequestEpic, monitorUdcBalanceEpic } from 'raiden-ts/services/epics';
-import { udcDeposited } from 'raiden-ts/services/actions';
+import { udcDeposited, msBalanceProofSent } from 'raiden-ts/services/actions';
 import { transferProcessed, transferSecretRegister } from 'raiden-ts/transfers/actions';
 import { channelKey } from 'raiden-ts/channels/utils';
 import { Direction } from 'raiden-ts/transfers/state';
-
-import { epicFixtures } from '../fixtures';
-import { raidenEpicDeps } from '../mocks';
 
 test('monitorUdcBalanceEpic', async () => {
   expect.assertions(2);
@@ -35,18 +35,18 @@ test('monitorUdcBalanceEpic', async () => {
   const { action$, state$ } = epicFixtures(depsMock);
   const deposit = bigNumberify(23) as UInt<32>;
 
-  depsMock.userDepositContract.functions.balances.mockResolvedValue(Zero);
+  depsMock.userDepositContract.functions.effectiveBalance.mockResolvedValue(Zero);
 
   const promise = monitorUdcBalanceEpic(action$, state$, depsMock).pipe(toArray()).toPromise();
 
   setTimeout(() => {
-    depsMock.userDepositContract.functions.balances.mockResolvedValueOnce(deposit);
+    depsMock.userDepositContract.functions.effectiveBalance.mockResolvedValueOnce(deposit);
     action$.next(newBlock({ blockNumber: 2 }));
   }, 10);
   setTimeout(() => action$.complete(), 50);
 
   await expect(promise).resolves.toEqual([udcDeposited(Zero as UInt<32>), udcDeposited(deposit)]);
-  expect(depsMock.userDepositContract.functions.balances).toHaveBeenCalledTimes(2);
+  expect(depsMock.userDepositContract.functions.effectiveBalance).toHaveBeenCalledTimes(2);
 });
 
 describe('monitorRequestEpic', () => {
@@ -218,11 +218,7 @@ describe('monitorRequestEpic', () => {
               token_network_address: tokenNetwork,
               channel_identifier: partnerBP.channelId,
               nonce: partnerBP.nonce,
-              balance_hash: createBalanceHash(
-                partnerBP.transferredAmount,
-                partnerBP.lockedAmount,
-                partnerBP.locksroot,
-              ),
+              balance_hash: createBalanceHash(partnerBP),
               additional_hash: partnerBP.additionalHash,
               signature: partnerBP.signature,
             },
@@ -239,6 +235,19 @@ describe('monitorRequestEpic', () => {
 
     expect(signerSpy).toHaveBeenCalledTimes(3);
     signerSpy.mockRestore();
+  });
+
+  test('success: token without known rateToSvt gets monitored', async () => {
+    expect.assertions(1);
+
+    action$.next(raidenConfigUpdate({ rateToSvt: {} }));
+
+    const promise = monitorRequestEpic(action$, state$, depsMock).toPromise();
+    action$.next(udcDeposited(monitoringReward.mul(2) as UInt<32>));
+    await receiveTransfer(20);
+    setTimeout(() => action$.complete(), 50);
+
+    await expect(promise).resolves.toBeDefined();
   });
 
   test('ignore: not enough udcBalance', async () => {
@@ -269,16 +278,20 @@ describe('monitorRequestEpic', () => {
   test('ignore: signing rejected not fatal', async () => {
     expect.assertions(2);
 
-    const signerSpy = jest.spyOn(depsMock.signer, 'signMessage');
-
     const promise = monitorRequestEpic(action$, state$, depsMock).toPromise();
     action$.next(udcDeposited(monitoringReward.mul(2) as UInt<32>));
 
-    await receiveTransfer(10);
+    // fails only after transfer's signatures
+    const originalSign = depsMock.signer.signMessage;
+    const signerSpy = jest
+      .spyOn(depsMock.signer, 'signMessage')
+      .mockImplementation(async (message) => {
+        if (signerSpy.mock.calls.length > 1) throw new Error('Signature rejected');
+        return originalSign.call(depsMock.signer, message);
+      });
 
-    // to reject AFTER receiveTransfer signed Processed
-    signerSpy.mockRejectedValueOnce(new Error('Signature rejected'));
-    setTimeout(() => action$.complete(), 50);
+    await receiveTransfer(10);
+    setTimeout(() => action$.complete(), 100);
 
     await expect(promise).resolves.toBeUndefined();
 
@@ -311,19 +324,60 @@ describe('monitorRequestEpic', () => {
 
     await expect(promise).resolves.toBeUndefined();
   });
+});
 
-  test('ignore: token without known rateToSvt', async () => {
-    expect.assertions(1);
+test('msMonitorNewBPEpic', async () => {
+  expect.assertions(1);
 
-    action$.next(raidenConfigUpdate({ rateToSvt: {} }));
+  const [raiden, partner] = await makeRaidens(2);
+  await ensureChannelIsOpen([raiden, partner]);
 
-    const promise = monitorRequestEpic(action$, state$, depsMock).toPromise();
-    action$.next(udcDeposited(monitoringReward.mul(2) as UInt<32>));
+  const { monitoringServiceContract } = raiden.deps;
+  const monitoringService = makeAddress();
+  const nonce = Two as UInt<8>;
+  const txHash = makeHash();
+  const txBlock = 68;
 
-    // transfer <= monitoringReward isn't worth to be monitored
-    await receiveTransfer(20);
-    setTimeout(() => action$.complete(), 50);
+  // emit a NewBalanceProofReceived event
+  raiden.deps.provider.emit(
+    monitoringServiceContract.filters.NewBalanceProofReceived(
+      null,
+      null,
+      null,
+      null,
+      null,
+      raiden.address,
+    ),
+    makeLog({
+      transactionHash: txHash,
+      blockNumber: txBlock,
+      filter: monitoringServiceContract.filters.NewBalanceProofReceived(
+        null,
+        null,
+        null,
+        nonce,
+        monitoringService,
+        raiden.address,
+      ),
+      data: defaultAbiCoder.encode(
+        ['address', 'uint256', 'uint256'], // first 3 event arguments, non-indexed
+        [tokenNetwork, id, raiden.config.monitoringReward!],
+      ),
+    }),
+  );
 
-    await expect(promise).resolves.toBeUndefined();
-  });
+  await waitBlock();
+  expect(raiden.output).toContainEqual(
+    msBalanceProofSent({
+      tokenNetwork,
+      partner: partner.address,
+      id,
+      reward: raiden.config.monitoringReward!,
+      nonce,
+      monitoringService,
+      txHash,
+      txBlock,
+      confirmed: true,
+    }),
+  );
 });

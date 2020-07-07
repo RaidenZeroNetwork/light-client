@@ -9,14 +9,7 @@
     </v-card-text>
 
     <v-card-actions v-else-if="uploadingStateProgress">
-      <v-row justify="center" no-gutters>
-        <v-progress-circular
-          class="upload-state__progress"
-          :size="110"
-          :width="7"
-          indeterminate
-        ></v-progress-circular>
-      </v-row>
+      <spinner />
     </v-card-actions>
 
     <v-card-actions v-else>
@@ -32,7 +25,7 @@
           <v-icon
             class="upload-state__dropzone__icon--inactive-dropzone"
             :class="{
-              'upload-state__dropzone__icon--active-dropzone': activeDropzone
+              'upload-state__dropzone__icon--active-dropzone': activeDropzone,
             }"
             size="90px"
           >
@@ -71,12 +64,14 @@
 import { Component, Prop, Emit, Vue } from 'vue-property-decorator';
 import RaidenDialog from '@/components/dialogs/RaidenDialog.vue';
 import ActionButton from '@/components/ActionButton.vue';
+import Spinner from '@/components/icons/Spinner.vue';
 
 @Component({
   components: {
     RaidenDialog,
-    ActionButton
-  }
+    ActionButton,
+    Spinner,
+  },
 })
 export default class UploadStateDialog extends Vue {
   dragCount: number = 0;
@@ -142,7 +137,7 @@ export default class UploadStateDialog extends Vue {
 
     let reader = new FileReader();
     /* istanbul ignore next */
-    reader.onload = e => {
+    reader.onload = (e) => {
       const target = e.target;
       if (!e.target) {
         return;
@@ -177,9 +172,6 @@ export default class UploadStateDialog extends Vue {
     height: 307px;
   }
 
-  &__progress {
-    color: $secondary-color;
-  }
   &__dropzone {
     border: dashed 2px $secondary-button-color;
     display: flex;

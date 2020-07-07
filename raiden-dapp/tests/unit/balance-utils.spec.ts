@@ -4,12 +4,12 @@ import { Token } from '@/model/types';
 import { One } from 'ethers/constants';
 
 describe('BalanceUtils', () => {
-  let token: Token = {
+  const token: Token = {
     address: '',
     balance: new BigNumber(0),
     decimals: 18,
     name: '',
-    symbol: ''
+    symbol: '',
   };
 
   test('return true when the number of decimal places is greater than what the token supports', () => {

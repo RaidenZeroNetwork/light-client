@@ -8,68 +8,84 @@ Vue.use(Router);
 
 /* istanbul ignore next */
 const router = new Router({
-  mode: 'history',
+  mode: process.env.NODE_ENV === 'production' ? 'history' : 'hash',
   base: process.env.BASE_URL,
   routes: [
     {
       path: '/',
       name: RouteNames.HOME,
       meta: {
-        title: 'Raiden dApp'
+        title: 'Raiden dApp',
       },
-      component: Home
+      component: Home,
     },
     {
       path: '*',
-      redirect: '/'
+      redirect: '/',
     },
     {
       path: '/transfer/:token',
       name: RouteNames.TRANSFER,
       meta: {
-        title: 'Transfer'
+        title: 'Transfer',
       },
-      component: () => import('../views/TransferRoute.vue')
+      component: () => import('../views/TransferRoute.vue'),
     },
     {
       path: '/transfer/:token/:target',
       name: RouteNames.TRANSFER_STEPS,
       meta: {
-        title: 'Transfer'
+        title: 'Transfer',
       },
-      component: () => import('../views/TransferStepsRoute.vue')
+      component: () => import('../views/TransferStepsRoute.vue'),
     },
     {
       path: '/connect',
       name: RouteNames.SELECT_TOKEN,
       meta: {
-        title: 'Select Token'
+        title: 'Select Token',
       },
-      component: () => import('../views/SelectTokenRoute.vue')
+      component: () => import('../views/SelectTokenRoute.vue'),
     },
     {
       path: '/connect/:token',
       name: RouteNames.SELECT_HUB,
       meta: {
-        title: 'Select Hub'
+        title: 'Select Hub',
       },
-      component: () => import('../views/SelectHubRoute.vue')
+      component: () => import('../views/SelectHubRoute.vue'),
     },
     {
       path: '/connect/:token/:partner',
       name: RouteNames.OPEN_CHANNEL,
       meta: {
-        title: 'Open Channel'
+        title: 'Open Channel',
       },
-      component: () => import('../views/OpenChannelRoute.vue')
+      component: () => import('../views/OpenChannelRoute.vue'),
     },
     {
       path: '/channels/:token',
       name: RouteNames.CHANNELS,
       meta: {
-        title: 'Channels'
+        title: 'Channels',
       },
-      component: () => import('../views/ChannelsRoute.vue')
+      component: () => import('../views/ChannelsRoute.vue'),
+    },
+    {
+      path: '/notifications',
+      name: RouteNames.NOTIFICATIONS,
+      beforeEnter: (to, from, next) => {
+        if (from.name === null) {
+          next({
+            name: RouteNames.HOME,
+          });
+        } else if (to.matched.length) {
+          to.matched[0].components.default = from.matched[0].components.default;
+          to.matched[0].components.notifications = () =>
+            import('../views/NotificationPanel.vue');
+        }
+        next();
+      },
     },
     {
       path: '/account',
@@ -80,7 +96,7 @@ const router = new Router({
         // is loaded when clicking out of the General view.
         if (from.name === null) {
           next({
-            name: RouteNames.HOME
+            name: RouteNames.HOME,
           });
         } else if (to.matched.length) {
           to.matched[0].components.default = from.matched[0].components.default;
@@ -94,53 +110,53 @@ const router = new Router({
           path: '/',
           name: RouteNames.ACCOUNT_ROOT,
           meta: {
-            title: 'Account'
+            title: 'Account',
           },
-          component: () => import('../views/account/AccountRoot.vue')
+          component: () => import('../views/account/AccountRoot.vue'),
         },
         {
           path: 'backup',
           name: RouteNames.ACCOUNT_BACKUP,
           meta: {
-            title: 'Backup State'
+            title: 'Backup State',
           },
-          component: () => import('../views/account/BackupState.vue')
+          component: () => import('../views/account/BackupState.vue'),
         },
         {
           path: 'raiden',
           name: RouteNames.ACCOUNT_RAIDEN,
           meta: {
-            title: 'Raiden Account'
+            title: 'Raiden Account',
           },
-          component: () => import('../views/account/RaidenAccount.vue')
+          component: () => import('../views/account/RaidenAccount.vue'),
         },
         {
           path: 'settings',
           name: RouteNames.ACCOUNT_SETTINGS,
           meta: {
-            title: 'Settings'
+            title: 'Settings',
           },
-          component: () => import('../views/account/Settings.vue')
+          component: () => import('../views/account/Settings.vue'),
         },
         {
           path: 'withdrawal',
           name: RouteNames.ACCOUNT_WITHDRAWAL,
           meta: {
-            title: 'Withdrawal'
+            title: 'Withdrawal',
           },
-          component: () => import('../views/account/WithdrawalRoute.vue')
+          component: () => import('../views/account/WithdrawalRoute.vue'),
         },
         {
           path: 'udc',
           name: RouteNames.ACCOUNT_UDC,
           meta: {
-            title: 'UDC'
+            title: 'UDC',
           },
-          component: () => import('../views/account/UDC.vue')
-        }
-      ]
-    }
-  ]
+          component: () => import('../views/account/UDC.vue'),
+        },
+      ],
+    },
+  ],
 });
 
 export default router;

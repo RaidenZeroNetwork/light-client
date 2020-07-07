@@ -1,5 +1,25 @@
 <template>
   <div class="channels">
+    <v-row class="ml-5 mr-5" no-gutters>
+      <v-col>
+        <span class="font-weight-light mr-1">
+          {{ $t('channels.title') }}
+        </span>
+        <v-tooltip top>
+          <template #activator="{ on }">
+            <span class="font-weight-medium" v-on="on">
+              {{
+                $t('channels.token-info', {
+                  name: truncate(token.name, 22),
+                  symbol: truncate(token.symbol, 8),
+                })
+              }}
+            </span>
+          </template>
+          <span> {{ token.address }} </span>
+        </v-tooltip>
+      </v-col>
+    </v-row>
     <list-header
       v-if="open.length > 0"
       :header="$t('channels.open.header')"
@@ -68,12 +88,13 @@ import NavigationMixin from '@/mixins/navigation-mixin';
 import ChannelList from '@/components/channels/ChannelList.vue';
 import ChannelDialogs from '@/components/channels/ChannelDialogs.vue';
 import { ChannelAction } from '@/types';
+import Filters from '@/filters';
 
 @Component({
   components: { ChannelDialogs, ListHeader, ChannelList },
   computed: {
-    ...mapGetters(['channels'])
-  }
+    ...mapGetters(['channels']),
+  },
 })
 export default class Channels extends Mixins(NavigationMixin) {
   message: string = '';
@@ -83,12 +104,13 @@ export default class Channels extends Mixins(NavigationMixin) {
 
   selectedChannel: RaidenChannel | null = null;
   expanded: { [id: number]: boolean } = {};
+  truncate = Filters.truncate;
 
   channelSelected(payload: { channel: RaidenChannel; expanded: boolean }) {
     const { expanded, channel } = payload;
     if (expanded) {
       this.selectedChannel = channel;
-      this.expanded = { [channel.id ?? -1]: true };
+      this.expanded = { [channel.id]: true };
     } else {
       this.selectedChannel = null;
       const updates = { ...this.expanded };
@@ -110,13 +132,13 @@ export default class Channels extends Mixins(NavigationMixin) {
 
   get open(): RaidenChannel[] {
     return this.channels(this.$route.params.token).filter(
-      channel => channel.state === ChannelState.open
+      (channel) => channel.state === ChannelState.open
     );
   }
 
   get closed(): RaidenChannel[] {
     return this.channels(this.$route.params.token).filter(
-      channel =>
+      (channel) =>
         channel.state === ChannelState.closed ||
         channel.state === ChannelState.closing
     );
@@ -124,7 +146,7 @@ export default class Channels extends Mixins(NavigationMixin) {
 
   get settleable(): RaidenChannel[] {
     return this.channels(this.$route.params.token).filter(
-      channel =>
+      (channel) =>
         channel.state === ChannelState.settling ||
         channel.state === ChannelState.settleable
     );
@@ -166,7 +188,7 @@ export default class Channels extends Mixins(NavigationMixin) {
   height: 100%;
 
   &:first-child {
-    padding-top: 50px;
+    padding-top: 40px;
   }
 
   &__overlay {

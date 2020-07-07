@@ -1,15 +1,25 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Contract, Event } from 'ethers/contract';
-import { Provider, JsonRpcProvider, Listener, EventType, Filter, Log } from 'ethers/providers';
+import { JsonRpcProvider, Listener, EventType, Filter, Log } from 'ethers/providers';
 import { Network } from 'ethers/utils';
 import { getNetwork as parseNetwork } from 'ethers/utils/networks';
 import { Observable, fromEventPattern, merge, from, of, EMPTY, combineLatest, defer } from 'rxjs';
-import { filter, first, map, switchMap, mergeMap, share } from 'rxjs/operators';
-import flatten from 'lodash/flatten';
+import { filter, first, map, mergeMap, share, toArray, debounceTime, tap } from 'rxjs/operators';
 import sortBy from 'lodash/sortBy';
 
 import { isntNil } from './types';
 
+export function fromEthersEvent<T>(
+  target: JsonRpcProvider,
+  event: string | string[],
+  resultSelector?: (...args: any[]) => T,
+): Observable<T>;
+export function fromEthersEvent<T extends Log>(
+  target: JsonRpcProvider,
+  event: Filter,
+  resultSelector?: (...args: any[]) => T,
+  range?: number,
+): Observable<T>;
 /**
  * Like rxjs' fromEvent, but event can be an EventFilter
  *
@@ -17,41 +27,75 @@ import { isntNil } from './types';
  * @param event - EventFilter or string representing the event to listen to
  * @param resultSelector - A map of events arguments to output parameters
  *      Default is to pass only first parameter
+ * @param range - Range (confirmation) blocks in the past to fetch events from
  * @returns Observable of target.on(event) events
  */
 export function fromEthersEvent<T>(
-  target: Provider,
+  target: JsonRpcProvider,
   event: EventType,
-  resultSelector?: (...args: any[]) => T, // eslint-disable-line
-): Observable<T> {
-  return fromEventPattern<T>(
-    (handler: Listener) => target.on(event, handler),
-    (handler: Listener) => target.removeListener(event, handler),
-    resultSelector,
-  ) as Observable<T>;
+  resultSelector?: (...args: any[]) => T,
+  range = 5,
+) {
+  if (typeof event === 'string' || Array.isArray(event))
+    return fromEventPattern<T>(
+      (handler: Listener) => target.on(event, handler),
+      (handler: Listener) => target.removeListener(event, handler),
+      resultSelector,
+    ) as Observable<T>;
+
+  let first = 0;
+  let latestEventBlock = 0;
+  return defer(() => {
+    // 'first' starts with subscription-time's private value set with provider.resetEventsBlock
+    first = (target as any)._lastBlockNumber || target.blockNumber || Number.POSITIVE_INFINITY;
+    return fromEthersEvent<number>(target, 'block');
+  }).pipe(
+    debounceTime(Math.ceil(target.pollingInterval / 10)), // debounce bursts of blocks
+    mergeMap(async (blockNumber, cnt) =>
+      target.getLogs({
+        ...event,
+        // on first [range] calls, getLogs since [first], unless an event was found on a previous
+        // call, on which case use block after [latestEventBlock];
+        // after [range] calls, ignore 'first' to get only since [-range] blocks
+        fromBlock: Math.max(
+          Math.min(blockNumber - range, cnt < range ? first : Number.POSITIVE_INFINITY),
+          latestEventBlock + 1,
+        ),
+        toBlock: 'latest',
+      }),
+    ),
+    mergeMap((logs) => from(logs)), // unwind
+    tap((log) => (latestEventBlock = Math.max(latestEventBlock, log.blockNumber!))),
+  );
 }
 
-/**
- * getEventsStream returns a stream of T-type tuples (arrays) from Contract's
- * events from filters. These events are polled since provider's [re]setEventsBlock to newest
- * polled block. If both 'fromBlock$' and 'lastSeenBlock$' are specified, also fetch past events
- * since fromBlock up to lastSeenBlock$ === provider.resetEventsBlock - 1
- * T must be a tuple-like type receiving all filters arguments plus the respective Event in the end
- *
- * @param contract - Contract source instance for filters, connected to a provider
- * @param filters - array of OR filters from tokenNetwork
- * @param fromBlock$ - Observable of a past blockNumber since when to fetch past events
- *                     If not provided, last resetEventsBlock is automatically used.
- * @returns Observable of contract's events
- */
-export function getEventsStream<T extends any[]>(
+export type ContractEvent =
+  | [Event]
+  | [any, Event]
+  | [any, any, Event]
+  | [any, any, any, Event]
+  | [any, any, any, any, Event]
+  | [any, any, any, any, any, Event]
+  | [any, any, any, any, any, any, Event]
+  | [any, any, any, any, any, any, any, Event]
+  | [any, any, any, any, any, any, any, any, Event]
+  | [any, any, any, any, any, any, any, any, any, Event];
+export function logToContractEvent<T extends ContractEvent>(
   contract: Contract,
-  filters: Filter[],
-  fromBlock$?: Observable<number>,
-): Observable<T> {
-  const provider = contract.provider as JsonRpcProvider;
-
-  const logToEvent = (log: Log): T | undefined => {
+): (log: Log) => T | undefined;
+export function logToContractEvent<T extends ContractEvent>(
+  contract: Contract,
+  log: Log,
+): T | undefined;
+/**
+ * Curried(2) function to map an ethers's Provider log to a contract event tuple
+ *
+ * @param contract - Contract instance
+ * @param log - Log to map
+ * @returns Tuple of events args plus Event object
+ */
+export function logToContractEvent<T extends ContractEvent>(contract: Contract, log?: Log) {
+  const mapper = (log: Log): T | undefined => {
     // parse log into [...args, event: Event] array,
     // the same that contract.on events/callbacks
     const parsed = contract.interface.parseLog(log);
@@ -67,13 +111,35 @@ export function getEventsStream<T extends any[]>(
       removeListener: () => {
         /* getLogs don't install filter */
       },
-      getBlock: () => provider.getBlock(log.blockHash!),
-      getTransaction: () => provider.getTransaction(log.transactionHash!),
-      getTransactionReceipt: () => provider.getTransactionReceipt(log.transactionHash!),
+      getBlock: () => contract.provider.getBlock(log.blockHash!),
+      getTransaction: () => contract.provider.getTransaction(log.transactionHash!),
+      getTransactionReceipt: () => contract.provider.getTransactionReceipt(log.transactionHash!),
       decode: (data: string, topics?: string[]) => parsed.decode(data, topics || log.topics),
     };
     return [...args, event] as T;
   };
+  return log !== undefined ? mapper(log) : mapper;
+}
+
+/**
+ * getEventsStream returns a stream of T-type tuples (arrays) from Contract's
+ * events from filters. These events are polled since provider's [re]setEventsBlock to newest
+ * polled block. If both 'fromBlock$' and 'lastSeenBlock$' are specified, also fetch past events
+ * since fromBlock up to lastSeenBlock$ === provider.resetEventsBlock - 1
+ * T must be a tuple-like type receiving all filters arguments plus the respective Event in the end
+ *
+ * @param contract - Contract source instance for filters, connected to a provider
+ * @param filters - array of OR filters from tokenNetwork
+ * @param fromBlock$ - Observable of a past blockNumber since when to fetch past events
+ *                     If not provided, last resetEventsBlock is automatically used.
+ * @returns Observable of contract's events
+ */
+export function getEventsStream<T extends ContractEvent>(
+  contract: Contract,
+  filters: Filter[],
+  fromBlock$?: Observable<number>,
+): Observable<T> {
+  const provider = contract.provider as JsonRpcProvider;
 
   // past events (in the closed-interval=[fromBlock, lastSeenBlock]),
   // fetch once, sort by blockNumber, emit all, complete
@@ -88,18 +154,23 @@ export function getEventsStream<T extends any[]>(
         ? of(provider.blockNumber)
         : fromEthersEvent<number>(provider, 'block').pipe(
             first(),
-            map((b) => provider.blockNumber ?? b),
+            map(() => provider.blockNumber),
+            share(),
           ),
-    ).pipe(share());
+    );
     pastEvents$ = combineLatest(fromBlock$, nextBlock$).pipe(
       first(),
-      switchMap(([fromBlock, toBlock]) =>
-        Promise.all(filters.map((filter) => provider.getLogs({ ...filter, fromBlock, toBlock }))),
+      mergeMap(([fromBlock, toBlock]) =>
+        from(filters).pipe(
+          mergeMap((filter) => provider.getLogs({ ...filter, fromBlock, toBlock })),
+          // flatten array of each getLogs query response and sort them
+          // emit log array elements as separate logs into stream (unwind)
+          mergeMap(from),
+          toArray(),
+          mergeMap((logs) => from(sortBy(logs, ['blockNumber']))),
+        ),
       ),
-      // flatten array of each getLogs query response and sort them
-      // emit log array elements as separate logs into stream (unwind)
-      mergeMap((logs) => from(sortBy(flatten(logs), ['blockNumber']))),
-      map(logToEvent),
+      map(logToContractEvent<T>(contract)),
       filter(isntNil),
     );
   }
@@ -108,9 +179,9 @@ export function getEventsStream<T extends any[]>(
   // where lastSeenBlock is the currentBlock at call time
   // doesn't complete, keep emitting events for each new block (if any) until unsubscription
   const newEvents$: Observable<T> = nextBlock$.pipe(
-    switchMap(() => from(filters)),
+    mergeMap(() => from(filters)),
     mergeMap((filter) => fromEthersEvent<Log>(provider, filter)),
-    map(logToEvent),
+    map(logToContractEvent<T>(contract)),
     filter(isntNil),
   );
 
