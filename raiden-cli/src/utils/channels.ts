@@ -39,3 +39,7 @@ export function transformSdkChannelFormatToApi(channel: RaidenChannel): ApiChann
     reveal_timeout: 0, // FIXME: Not defined here. Python client handles reveal timeout differently,
   };
 }
+
+export function proofzkBalances() {
+  return { result: "show zkBallances" }
+}

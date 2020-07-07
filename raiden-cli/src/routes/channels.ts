@@ -2,6 +2,9 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { first } from 'rxjs/operators';
 import { ErrorCodes, RaidenError } from 'raiden-ts';
 import { Cli } from '../types';
+
+import artifact from "./Counter.json";
+
 import {
   validateAddressParameter,
   isInvalidParameterError,
@@ -11,6 +14,7 @@ import {
   flattenChannelDictionary,
   transformSdkChannelFormatToApi,
   filterChannels,
+  proofzkBalances,
 } from '../utils/channels';
 
 function isConflictError(error: RaidenError): boolean {
@@ -94,8 +98,9 @@ export function makeChannelsRouter(this: Cli): Router {
   router.put('/', openChannel.bind(this));
 
   router.patch('/:tokenAddress/:partnerAddress', (_request: Request, response: Response) => {
-    response.status(404).send('Not implemented yet');
+    response.status(201).json(proofzkBalances());
   });
 
   return router;
 }
+
